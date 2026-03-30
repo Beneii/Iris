@@ -110,8 +110,8 @@ export default function HomeView({
         flex: 1,
         alignItems: "center",
         justifyContent: "center",
-        padding: isMobile ? "16px 20px" : "24px 32px",
-        gap: isMobile ? 20 : 28,
+        padding: isMobile ? "12px 20px" : "24px 32px",
+        gap: isMobile ? 16 : 24,
         position: "relative",
         maxWidth: 560,
         margin: "0 auto",
@@ -119,9 +119,9 @@ export default function HomeView({
       }}>
 
         {/* ─── Eye ─── */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: isMobile ? 6 : 10 }}>
           <IrisEyeTracking
-            size={isMobile ? 120 : 180}
+            size={isMobile ? 100 : 180}
             status={isError ? "error" : isProcessing ? "processing" : "idle"}
             connectionState={connectionState}
           />
@@ -225,7 +225,7 @@ export default function HomeView({
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                  padding: "7px 8px",
+                  padding: isMobile ? "5px 6px" : "7px 8px",
                   borderRadius: 6,
                   background: "transparent",
                   border: "none",

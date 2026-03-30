@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
+    },
+    "computer-use": {
+      "command": "npx",
+      "args": ["-y", "computer-use-mcp"]
+    }
+  }
+}

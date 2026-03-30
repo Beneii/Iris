@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320">
+  <style>
+    @keyframes shake {
+      0%, 100% { transform: rotate(0deg); }
+      15% { transform: rotate(3deg); }
+      30% { transform: rotate(-3deg); }
+      45% { transform: rotate(2deg); }
+      60% { transform: rotate(-2deg); }
+      75% { transform: rotate(1deg); }
+      90% { transform: rotate(-1deg); }
+    }
+    .eye-group { transform-origin: 160px 160px; animation: shake 0.8s ease-in-out infinite; }
+  </style>
+  <g class="eye-group" transform="matrix(10.216553 0 0 10.216553 -3.464848 57.83447)">
+    <g mask="url(#m)">
+      <path d="M1,10c0,0,5.5-8.5,15-8.5s15,8.5,15,8.5-5.5,8.5-15,8.5-15-8.5-15-8.5Z" fill="#fff"/>
+      <mask id="m" mask-type="luminance" x="-150%" y="-150%" height="400%" width="400%">
+        <rect width="32" height="20" fill="#fff"/>
+        <circle r="6.2" transform="translate(16 10)"/>
+      </mask>
+    </g>
+    <path d="M16,4.5c.5,3,2.2,4.7,5.2,5.3-3,.6-4.7,2.4-5.2,5.4-.5-3-2.2-4.8-5.2-5.4c3-.6,4.7-2.3,5.2-5.3Z" fill="#fff"/>
+  </g>
+</svg>

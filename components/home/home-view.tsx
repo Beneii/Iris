@@ -19,6 +19,21 @@ export type HomeNotification = {
   read: boolean
 }
 
+/* ─── Provider presets (what Hermes can switch between) ─── */
+type ProviderPreset = {
+  label: string
+  model: string
+  provider: string
+  /** OpenUsage providerId to match against, if any */
+  usageId?: string
+}
+
+const PROVIDER_PRESETS: ProviderPreset[] = [
+  { label: "Claude", model: "claude-opus-4-6", provider: "anthropic", usageId: "claude" },
+  { label: "Gemini", model: "gemini-2.5-pro", provider: "google", usageId: "gemini" },
+  { label: "OpenRouter", model: "anthropic/claude-sonnet-4", provider: "openrouter" },
+]
+
 /* ─── Props ─── */
 interface HomeViewProps {
   connectionState: ConnectionState
@@ -28,6 +43,9 @@ interface HomeViewProps {
   isMobile?: boolean
   resumeSession: (id: string) => void
   onNewSession: () => void
+  model: string
+  provider: string
+  setConfig: (key: string, value: unknown) => void
 }
 
 /* ─── Helpers ─── */
@@ -70,9 +88,17 @@ export default function HomeView({
   isMobile = false,
   resumeSession,
   onNewSession,
+  model,
+  provider,
+  setConfig,
 }: HomeViewProps) {
   const [notifications] = React.useState<HomeNotification[]>(getMockNotifications)
-  const { providers, isAvailable: usageAvailable } = useOpenUsage()
+  const { providers: usageProviders, isAvailable: usageAvailable } = useOpenUsage()
+
+  const switchProvider = React.useCallback((preset: ProviderPreset) => {
+    setConfig("model.default", preset.model)
+    setConfig("model.provider", preset.provider)
+  }, [setConfig])
 
   const isError = connectionState !== "connected"
   const statusLabel = isError ? "Offline" : isProcessing ? "Processing" : "Watching"
@@ -134,20 +160,105 @@ export default function HomeView({
           </span>
         </div>
 
-        {/* ─── Provider Usage ─── */}
-        {usageAvailable && providers.length > 0 && (
-          <div style={{
-            width: "100%",
-            maxWidth: 400,
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-          }}>
-            {providers.map(p => (
-              <UsageCard key={p.providerId} provider={p} compact={isMobile} />
-            ))}
+        {/* ─── Provider Usage + Quick Switch ─── */}
+        <div style={{
+          width: "100%",
+          maxWidth: 400,
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+        }}>
+          {/* Usage cards from OpenUsage */}
+          {usageAvailable && usageProviders.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {usageProviders.map(p => (
+                <UsageCard key={p.providerId} provider={p} compact={isMobile} />
+              ))}
+            </div>
+          )}
+
+          {/* Provider quick-switch */}
+          <div>
+            <div style={{
+              fontSize: 9,
+              fontWeight: 600,
+              textTransform: "uppercase" as const,
+              letterSpacing: "0.08em",
+              color: "rgba(255,255,255,0.15)",
+              marginBottom: 6,
+            }}>
+              Provider
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {PROVIDER_PRESETS.map(preset => {
+                const isActive = provider === preset.provider && model.includes(preset.model.split("/").pop() || preset.model)
+                // Check if this provider is running low in OpenUsage
+                const usage = usageAvailable
+                  ? usageProviders.find(u => u.providerId === preset.usageId)
+                  : undefined
+                const mainProgress = usage?.lines.find((l): l is UsageLineProgress => l.type === "progress")
+                const pct = mainProgress && mainProgress.limit > 0
+                  ? (mainProgress.used / mainProgress.limit) * 100
+                  : null
+                const isLow = pct !== null && pct >= 80
+
+                return (
+                  <button
+                    key={preset.label}
+                    onClick={() => { if (!isActive) switchProvider(preset) }}
+                    style={{
+                      padding: "5px 12px",
+                      borderRadius: 6,
+                      fontSize: 11,
+                      fontWeight: isActive ? 600 : 400,
+                      color: isActive
+                        ? "rgba(255,255,255,0.85)"
+                        : isLow
+                          ? "rgba(245,158,11,0.7)"
+                          : "rgba(255,255,255,0.35)",
+                      background: isActive
+                        ? "rgba(255,255,255,0.08)"
+                        : "rgba(255,255,255,0.02)",
+                      border: isActive
+                        ? "1px solid rgba(255,255,255,0.15)"
+                        : "1px solid rgba(255,255,255,0.04)",
+                      cursor: isActive ? "default" : "pointer",
+                      transition: "all 150ms ease",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                    }}
+                    onMouseEnter={e => {
+                      if (!isActive) {
+                        e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"
+                        e.currentTarget.style.background = "rgba(255,255,255,0.04)"
+                      }
+                    }}
+                    onMouseLeave={e => {
+                      if (!isActive) {
+                        e.currentTarget.style.borderColor = "rgba(255,255,255,0.04)"
+                        e.currentTarget.style.background = "rgba(255,255,255,0.02)"
+                      }
+                    }}
+                  >
+                    {isActive && (
+                      <span style={{
+                        width: 4, height: 4, borderRadius: "50%",
+                        background: "rgba(52,199,89,0.7)", flexShrink: 0,
+                      }} />
+                    )}
+                    {preset.label}
+                    {isLow && !isActive && (
+                      <span style={{ fontSize: 9, color: "rgba(245,158,11,0.5)" }}>
+                        {Math.round(pct!)}%
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
           </div>
-        )}
+        </div>
 
         {/* ─── Command bar ─── */}
         <button

@@ -456,9 +456,6 @@ export default function HomePage() {
             isMobile={isMobile}
             resumeSession={resumeSession}
             onNewSession={() => { hapticLight(); newSession() }}
-            model={model}
-            provider={provider}
-            setConfig={setConfig}
           />
         ) : (
           <>

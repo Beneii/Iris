@@ -19,21 +19,6 @@ export type HomeNotification = {
   read: boolean
 }
 
-/* ─── Provider presets (what Hermes can switch between) ─── */
-type ProviderPreset = {
-  label: string
-  model: string
-  provider: string
-  /** OpenUsage providerId to match against, if any */
-  usageId?: string
-}
-
-const PROVIDER_PRESETS: ProviderPreset[] = [
-  { label: "Claude", model: "claude-opus-4-6", provider: "anthropic", usageId: "claude" },
-  { label: "Gemini", model: "gemini-2.5-pro", provider: "google", usageId: "gemini" },
-  { label: "OpenRouter", model: "anthropic/claude-sonnet-4", provider: "openrouter" },
-]
-
 /* ─── Props ─── */
 interface HomeViewProps {
   connectionState: ConnectionState
@@ -43,9 +28,6 @@ interface HomeViewProps {
   isMobile?: boolean
   resumeSession: (id: string) => void
   onNewSession: () => void
-  model: string
-  provider: string
-  setConfig: (key: string, value: unknown) => void
 }
 
 /* ─── Helpers ─── */
@@ -88,17 +70,9 @@ export default function HomeView({
   isMobile = false,
   resumeSession,
   onNewSession,
-  model,
-  provider,
-  setConfig,
 }: HomeViewProps) {
   const [notifications] = React.useState<HomeNotification[]>(getMockNotifications)
   const { providers, isAvailable: usageAvailable } = useProviderUsage()
-
-  const switchProvider = React.useCallback((preset: ProviderPreset) => {
-    setConfig("model.default", preset.model)
-    setConfig("model.provider", preset.provider)
-  }, [setConfig])
 
   const isError = connectionState !== "connected"
   const statusLabel = isError ? "Offline" : isProcessing ? "Processing" : "Watching"
@@ -110,19 +84,19 @@ export default function HomeView({
       flexDirection: "column",
       flex: 1,
       minHeight: 0,
-      overflow: "hidden",
+      position: "relative",
     }}>
       {/* ─── Background glow ─── */}
       <div style={{
         position: "absolute",
-        top: "-20%",
+        top: "5%",
         left: "50%",
         transform: "translateX(-50%)",
-        width: "80%",
-        height: "60%",
+        width: "90%",
+        height: "50%",
         background: isProcessing
           ? "radial-gradient(ellipse, rgba(91,164,246,0.06) 0%, transparent 70%)"
-          : "radial-gradient(ellipse, rgba(255,255,255,0.02) 0%, transparent 70%)",
+          : "radial-gradient(ellipse, rgba(255,255,255,0.03) 0%, transparent 70%)",
         pointerEvents: "none",
         transition: "background 1s ease",
       }} />
@@ -177,87 +151,7 @@ export default function HomeView({
             </div>
           )}
 
-          {/* Provider quick-switch */}
-          <div>
-            <div style={{
-              fontSize: 9,
-              fontWeight: 600,
-              textTransform: "uppercase" as const,
-              letterSpacing: "0.08em",
-              color: "rgba(255,255,255,0.15)",
-              marginBottom: 6,
-            }}>
-              Provider
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {PROVIDER_PRESETS.map(preset => {
-                const isActive = provider === preset.provider && model.includes(preset.model.split("/").pop() || preset.model)
-                // Check if this provider is running low in OpenUsage
-                const usage = usageAvailable
-                  ? providers.find(u => u.providerId === preset.usageId)
-                  : undefined
-                const mainProgress = usage?.lines.find((l): l is UsageLineProgress => l.type === "progress")
-                const pct = mainProgress && mainProgress.limit > 0
-                  ? (mainProgress.used / mainProgress.limit) * 100
-                  : null
-                const isLow = pct !== null && pct >= 80
 
-                return (
-                  <button
-                    key={preset.label}
-                    onClick={() => { if (!isActive) switchProvider(preset) }}
-                    style={{
-                      padding: "5px 12px",
-                      borderRadius: 6,
-                      fontSize: 11,
-                      fontWeight: isActive ? 600 : 400,
-                      color: isActive
-                        ? "rgba(255,255,255,0.85)"
-                        : isLow
-                          ? "rgba(245,158,11,0.7)"
-                          : "rgba(255,255,255,0.35)",
-                      background: isActive
-                        ? "rgba(255,255,255,0.08)"
-                        : "rgba(255,255,255,0.02)",
-                      border: isActive
-                        ? "1px solid rgba(255,255,255,0.15)"
-                        : "1px solid rgba(255,255,255,0.04)",
-                      cursor: isActive ? "default" : "pointer",
-                      transition: "all 150ms ease",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 5,
-                    }}
-                    onMouseEnter={e => {
-                      if (!isActive) {
-                        e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"
-                        e.currentTarget.style.background = "rgba(255,255,255,0.04)"
-                      }
-                    }}
-                    onMouseLeave={e => {
-                      if (!isActive) {
-                        e.currentTarget.style.borderColor = "rgba(255,255,255,0.04)"
-                        e.currentTarget.style.background = "rgba(255,255,255,0.02)"
-                      }
-                    }}
-                  >
-                    {isActive && (
-                      <span style={{
-                        width: 4, height: 4, borderRadius: "50%",
-                        background: "rgba(52,199,89,0.7)", flexShrink: 0,
-                      }} />
-                    )}
-                    {preset.label}
-                    {isLow && !isActive && (
-                      <span style={{ fontSize: 9, color: "rgba(245,158,11,0.5)" }}>
-                        {Math.round(pct!)}%
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
         </div>
 
         {/* ─── Command bar ─── */}

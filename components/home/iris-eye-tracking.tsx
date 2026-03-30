@@ -10,176 +10,139 @@ interface IrisEyeTrackingProps {
 }
 
 /**
- * Large Iris eye that tracks the user's cursor.
- * The pupil (mask circle) and sparkle (diamond) shift toward the mouse position.
- * Uses inline SVG so we can manipulate transforms directly.
+ * Large Iris eye that tracks cursor. Matches the original iris-static.svg geometry exactly:
+ * viewBox 32x20, eye path, mask circle r=6.2 at (16,10), sparkle diamond at (16,~10).
+ * Scaled up via viewBox → container size.
  */
 export function IrisEyeTracking({ size = 200, status = "idle", connectionState = "connected" }: IrisEyeTrackingProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
-  const pupilRef = React.useRef<SVGCircleElement>(null)
-  const sparkleRef = React.useRef<SVGPathElement>(null)
   const rafRef = React.useRef<number>(0)
   const targetRef = React.useRef({ x: 0, y: 0 })
   const currentRef = React.useRef({ x: 0, y: 0 })
 
-  // Max pupil travel in SVG-local units (the viewBox is 32x20 for the eye)
-  const MAX_SHIFT_X = 4.5
-  const MAX_SHIFT_Y = 2.5
+  // In the 32x20 coordinate space
+  const CX = 16, CY = 10
+  const MAX_X = 3.8, MAX_Y = 2.0
 
-  // Smooth lerp animation
+  // Smooth lerp
   React.useEffect(() => {
     let running = true
-
     const animate = () => {
       if (!running) return
-      const cur = currentRef.current
-      const tgt = targetRef.current
-      const ease = 0.08
+      const c = currentRef.current, t = targetRef.current
+      c.x += (t.x - c.x) * 0.07
+      c.y += (t.y - c.y) * 0.07
 
-      cur.x += (tgt.x - cur.x) * ease
-      cur.y += (tgt.y - cur.y) * ease
-
-      if (pupilRef.current) {
-        pupilRef.current.setAttribute("transform", `translate(${16 + cur.x} ${10 + cur.y})`)
-      }
-      if (sparkleRef.current) {
-        // Sparkle moves slightly less than pupil for parallax
-        const sx = cur.x * 0.85
-        const sy = cur.y * 0.85
-        sparkleRef.current.setAttribute("transform", `translate(${sx} ${sy})`)
-      }
+      const pupil = document.getElementById("iris-track-pupil")
+      const spark = document.getElementById("iris-track-sparkle")
+      if (pupil) pupil.setAttribute("transform", `translate(${CX + c.x} ${CY + c.y})`)
+      if (spark) spark.setAttribute("transform", `translate(${c.x * 0.8} ${c.y * 0.8})`)
 
       rafRef.current = requestAnimationFrame(animate)
     }
-
     rafRef.current = requestAnimationFrame(animate)
     return () => { running = false; cancelAnimationFrame(rafRef.current) }
   }, [])
 
-  // Mouse + touch tracking
+  // Mouse + touch
   React.useEffect(() => {
-    const updateTarget = (clientX: number, clientY: number) => {
+    const update = (cx: number, cy: number) => {
       if (!containerRef.current) return
-      const rect = containerRef.current.getBoundingClientRect()
-      const centerX = rect.left + rect.width / 2
-      const centerY = rect.top + rect.height / 2
-
-      // Normalize to -1..1 range based on viewport distance
-      const dx = (clientX - centerX) / (window.innerWidth / 2)
-      const dy = (clientY - centerY) / (window.innerHeight / 2)
-
-      // Clamp and apply max shift
+      const r = containerRef.current.getBoundingClientRect()
+      const dx = (cx - (r.left + r.width / 2)) / (window.innerWidth / 2)
+      const dy = (cy - (r.top + r.height / 2)) / (window.innerHeight / 2)
       targetRef.current = {
-        x: Math.max(-1, Math.min(1, dx)) * MAX_SHIFT_X,
-        y: Math.max(-1, Math.min(1, dy)) * MAX_SHIFT_Y,
+        x: Math.max(-1, Math.min(1, dx)) * MAX_X,
+        y: Math.max(-1, Math.min(1, dy)) * MAX_Y,
       }
     }
+    const onMouse = (e: MouseEvent) => update(e.clientX, e.clientY)
+    const onTouch = (e: TouchEvent) => { if (e.touches[0]) update(e.touches[0].clientX, e.touches[0].clientY) }
+    const onTouchEnd = () => { targetRef.current = { x: 0, y: 0 } }
 
-    const handleMouseMove = (e: MouseEvent) => updateTarget(e.clientX, e.clientY)
-    const handleTouchMove = (e: TouchEvent) => {
-      if (e.touches.length > 0) updateTarget(e.touches[0].clientX, e.touches[0].clientY)
-    }
-    // Reset pupil to center when touch ends
-    const handleTouchEnd = () => { targetRef.current = { x: 0, y: 0 } }
-
-    window.addEventListener("mousemove", handleMouseMove)
-    window.addEventListener("touchmove", handleTouchMove, { passive: true })
-    window.addEventListener("touchend", handleTouchEnd)
+    window.addEventListener("mousemove", onMouse)
+    window.addEventListener("touchmove", onTouch, { passive: true })
+    window.addEventListener("touchend", onTouchEnd)
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove)
-      window.removeEventListener("touchmove", handleTouchMove)
-      window.removeEventListener("touchend", handleTouchEnd)
+      window.removeEventListener("mousemove", onMouse)
+      window.removeEventListener("touchmove", onTouch)
+      window.removeEventListener("touchend", onTouchEnd)
     }
   }, [])
 
-  // Blink animation
-  const [blinkPhase, setBlinkPhase] = React.useState(0) // 0 = open, 1 = closing, 2 = closed, 3 = opening
-  const blinkTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-
+  // Blink
+  const [blink, setBlink] = React.useState(1) // scaleY
   React.useEffect(() => {
-    const scheduleBlink = () => {
-      blinkTimerRef.current = setTimeout(() => {
-        setBlinkPhase(1) // closing
-        setTimeout(() => {
-          setBlinkPhase(2) // closed
-          setTimeout(() => {
-            setBlinkPhase(3) // opening
-            setTimeout(() => {
-              setBlinkPhase(0) // open
-              scheduleBlink()
-            }, 80)
-          }, 60)
-        }, 80)
-      }, 3000 + Math.random() * 4000)
+    let tid: ReturnType<typeof setTimeout>
+    const doBlink = () => {
+      setBlink(0.08)
+      setTimeout(() => setBlink(1), 120)
+      tid = setTimeout(doBlink, 3000 + Math.random() * 5000)
     }
-
-    scheduleBlink()
-    return () => { if (blinkTimerRef.current) clearTimeout(blinkTimerRef.current) }
+    tid = setTimeout(doBlink, 2000 + Math.random() * 3000)
+    return () => clearTimeout(tid)
   }, [])
 
-  const height = size * 0.6
-
-  // Eyelid squeeze for blink
-  const lidScaleY = blinkPhase === 0 ? 1 : blinkPhase === 1 ? 0.15 : blinkPhase === 2 ? 0.02 : 0.4
-
-  // Status-based glow
-  const glowColor = status === "error" || connectionState !== "connected"
-    ? "rgba(239, 68, 68, 0.3)"
-    : status === "processing"
-      ? "rgba(91, 164, 246, 0.4)"
-      : "rgba(255, 255, 255, 0.08)"
-
-  const glowSize = status === "processing" ? 40 : 20
+  const h = size * 0.625 // aspect ratio of 32:20
+  const isError = status === "error" || connectionState !== "connected"
+  const isProcessing = status === "processing"
 
   return (
     <div
       ref={containerRef}
-      style={{
-        width: size,
-        height,
-        position: "relative",
-        filter: `drop-shadow(0 0 ${glowSize}px ${glowColor})`,
-        transition: "filter 600ms ease",
-      }}
+      style={{ width: size, height: h, position: "relative" }}
     >
+      {/* Glow layer behind */}
+      <div style={{
+        position: "absolute",
+        inset: "-30%",
+        borderRadius: "50%",
+        background: isError
+          ? "radial-gradient(circle, rgba(239,68,68,0.15) 0%, transparent 70%)"
+          : isProcessing
+            ? "radial-gradient(circle, rgba(91,164,246,0.12) 0%, transparent 70%)"
+            : "radial-gradient(circle, rgba(255,255,255,0.04) 0%, transparent 70%)",
+        transition: "background 800ms ease",
+        pointerEvents: "none",
+      }} />
+
       <svg
-        viewBox="0 0 320 200"
+        viewBox="0 0 32 20"
         width={size}
-        height={height}
-        style={{ display: "block" }}
+        height={h}
+        style={{ display: "block", position: "relative" }}
       >
         <defs>
-          <mask id="iris-eye-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="320" height="200">
-            <rect width="320" height="200" fill="#fff" />
+          <mask id="iris-track-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="32" height="20">
+            <rect width="32" height="20" fill="white" />
             <circle
-              ref={pupilRef}
-              r="63"
+              id="iris-track-pupil"
+              r="6.2"
               fill="black"
-              transform="translate(160 100)"
+              transform={`translate(${CX} ${CY})`}
             />
           </mask>
         </defs>
 
-        <g
-          style={{
-            transformOrigin: "160px 100px",
-            transform: `scaleY(${lidScaleY})`,
-            transition: "transform 80ms ease-in-out",
-          }}
-        >
-          {/* Eye shape (sclera) */}
+        <g style={{
+          transformOrigin: "16px 10px",
+          transform: `scaleY(${blink})`,
+          transition: "transform 100ms ease-in-out",
+        }}>
+          {/* Sclera with pupil cutout */}
           <path
-            d="M10,100 C10,100 65.5,14 160,14 C254.5,14 310,100 310,100 C310,100 254.5,186 160,186 C65.5,186 10,100 10,100Z"
+            d="M1,10c0,0,5.5-8.5,15-8.5s15,8.5,15,8.5-5.5,8.5-15,8.5-15-8.5-15-8.5Z"
             fill="white"
-            mask="url(#iris-eye-mask)"
+            mask="url(#iris-track-mask)"
           />
 
-          {/* Sparkle / iris highlight */}
-          <g ref={sparkleRef} transform="translate(0 0)">
+          {/* Sparkle / iris diamond */}
+          <g id="iris-track-sparkle" transform="translate(0 0)">
             <path
-              d="M160,50 C165,80.6 178.2,93.6 213.3,100 C178.2,106.1 165,119.3 160,150.7 C155,119.3 141.8,101.3 106.7,100 C141.8,93.9 155,80.6 160,50Z"
+              d="M16,4.5c.5,3,2.2,4.7,5.2,5.3-3,.6-4.7,2.4-5.2,5.4-.5-3-2.2-4.8-5.2-5.4c3-.6,4.7-2.3,5.2-5.3Z"
               fill="white"
-              className={status === "processing" ? "iris-sparkle-pulse" : ""}
+              className={isProcessing ? "iris-sparkle-pulse" : ""}
+              style={{ transformOrigin: "16px 10px" }}
             />
           </g>
         </g>

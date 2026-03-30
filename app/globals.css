@@ -502,13 +502,22 @@ html, body {
 
 .iris-sparkle-pulse {
   animation: sparkle-pulse 1.5s ease-in-out infinite;
-  transform-origin: 160px 100px;
+  transform-origin: 16px 10px;
 }
 
-/* ─── Home notification hover ─── */
-.home-notification {
-  position: relative;
-  transition: background 120ms ease;
+/* ─── Command bar focus ─── */
+.command-bar-wrapper:focus-within {
+  border-color: rgba(91, 164, 246, 0.25) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2), 0 0 0 1px rgba(91, 164, 246, 0.1), 0 0 20px rgba(91, 164, 246, 0.06), inset 0 1px 0 rgba(255,255,255,0.02) !important;
+}
+
+.command-bar-wrapper input::placeholder {
+  color: rgba(255, 255, 255, 0.12);
+  transition: color 200ms ease;
+}
+
+.command-bar-wrapper:focus-within input::placeholder {
+  color: rgba(255, 255, 255, 0.08);
 }
 
 /* ─── Home dashboard fade-in ─── */

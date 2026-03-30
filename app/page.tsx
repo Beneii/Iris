@@ -452,20 +452,10 @@ export default function HomePage() {
             connectionState={connectionState}
             isProcessing={isProcessing}
             sessionsList={sessionsList}
-            messages={messages}
             agentName={agentName}
             isMobile={isMobile}
-            composerValue={composerValue}
-            onComposerChange={setComposerValue}
-            onSend={handleSend}
-            onCancel={() => { hapticMedium(); cancelResponse() }}
-            showCommandPalette={showCommandPalette}
-            onCommandPaletteChange={setShowCommandPalette}
-            onCommandSelect={handleCommandSelect}
-            attachments={attachments}
-            onFilesAttached={handleFilesAttached}
-            onRemoveAttachment={handleRemoveAttachment}
             resumeSession={resumeSession}
+            onNewSession={() => { hapticLight(); newSession() }}
           />
         ) : (
           <>

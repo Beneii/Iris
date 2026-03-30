@@ -2,50 +2,53 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 
-/* ─── Types matching OpenUsage local HTTP API ─── */
+/* ─── Types ─── */
 
 export interface UsageLineProgress {
   type: "progress"
   label: string
   used: number
   limit: number
-  format: { kind: "percent" | "number" | "currency" | "tokens" }
-  resetsAt?: string
-  periodDurationMs?: number
-  color?: string | null
+  format?: string
+  resetsAt?: string | null
 }
 
 export interface UsageLineText {
   type: "text"
   label: string
   value: string
-  color?: string | null
-  subtitle?: string | null
 }
 
-export interface UsageLineBadge {
-  type: "badge"
-  label: string
-  value: string
-  color?: string | null
-}
-
-export type UsageLine = UsageLineProgress | UsageLineText | UsageLineBadge
+export type UsageLine = UsageLineProgress | UsageLineText
 
 export interface ProviderUsage {
   providerId: string
   displayName: string
-  plan?: string
+  plan?: string | null
   lines: UsageLine[]
   fetchedAt: string
 }
 
+interface UsageResponse {
+  error: string | null
+  providers: ProviderUsage[]
+}
+
+/* ─── Electron bridge type ─── */
+declare global {
+  interface Window {
+    electronAPI?: {
+      resizeWindow: (deltaWidth: number) => void
+      getProviderUsage: () => Promise<UsageResponse>
+    }
+  }
+}
+
 /* ─── Hook ─── */
 
-const OPENUSAGE_URL = "http://127.0.0.1:6736/v1/usage"
 const POLL_INTERVAL = 30_000 // 30s
 
-export function useOpenUsage() {
+export function useProviderUsage() {
   const [providers, setProviders] = useState<ProviderUsage[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isAvailable, setIsAvailable] = useState(false)
@@ -53,25 +56,28 @@ export function useOpenUsage() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchUsage = useCallback(async () => {
+    // Only works in Electron (IPC bridge)
+    if (!window.electronAPI?.getProviderUsage) {
+      setIsAvailable(false)
+      setIsLoading(false)
+      return
+    }
+
     try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 3000)
-
-      const res = await fetch(OPENUSAGE_URL, { signal: controller.signal })
-      clearTimeout(timeout)
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`)
+      const result = await window.electronAPI.getProviderUsage()
+      if (result.error) {
+        setError(result.error)
+        setIsAvailable(false)
+        setProviders([])
+      } else {
+        setProviders(result.providers)
+        setIsAvailable(result.providers.length > 0)
+        setError(null)
       }
-
-      const data: ProviderUsage[] = await res.json()
-      setProviders(data)
-      setIsAvailable(true)
-      setError(null)
     } catch {
       setIsAvailable(false)
       setProviders([])
-      setError("OpenUsage not reachable")
+      setError("Failed to fetch usage")
     } finally {
       setIsLoading(false)
     }

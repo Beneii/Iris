@@ -3,7 +3,7 @@
 import * as React from "react"
 import { IrisEyeTracking } from "./iris-eye-tracking"
 import { type ConnectionState, type SessionInfo } from "@/hooks/use-hermes-bridge"
-import { useOpenUsage, type ProviderUsage, type UsageLineProgress } from "@/hooks/use-openusage"
+import { useProviderUsage, type ProviderUsage, type UsageLineProgress } from "@/hooks/use-openusage"
 
 /* ─── Notification Type ─── */
 export type NotificationType = "info" | "success" | "warning" | "error" | "approval"
@@ -93,7 +93,7 @@ export default function HomeView({
   setConfig,
 }: HomeViewProps) {
   const [notifications] = React.useState<HomeNotification[]>(getMockNotifications)
-  const { providers: usageProviders, isAvailable: usageAvailable } = useOpenUsage()
+  const { providers, isAvailable: usageAvailable } = useProviderUsage()
 
   const switchProvider = React.useCallback((preset: ProviderPreset) => {
     setConfig("model.default", preset.model)
@@ -169,9 +169,9 @@ export default function HomeView({
           gap: 10,
         }}>
           {/* Usage cards from OpenUsage */}
-          {usageAvailable && usageProviders.length > 0 && (
+          {usageAvailable && providers.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {usageProviders.map(p => (
+              {providers.map(p => (
                 <UsageCard key={p.providerId} provider={p} compact={isMobile} />
               ))}
             </div>
@@ -194,7 +194,7 @@ export default function HomeView({
                 const isActive = provider === preset.provider && model.includes(preset.model.split("/").pop() || preset.model)
                 // Check if this provider is running low in OpenUsage
                 const usage = usageAvailable
-                  ? usageProviders.find(u => u.providerId === preset.usageId)
+                  ? providers.find(u => u.providerId === preset.usageId)
                   : undefined
                 const mainProgress = usage?.lines.find((l): l is UsageLineProgress => l.type === "progress")
                 const pct = mainProgress && mainProgress.limit > 0
@@ -364,7 +364,7 @@ function getBarColor(pct: number): string {
   return "rgba(255,255,255,0.25)"
 }
 
-function formatResetTime(resetsAt?: string): string {
+function formatResetTime(resetsAt?: string | null): string {
   if (!resetsAt) return ""
   const diff = new Date(resetsAt).getTime() - Date.now()
   if (diff <= 0) return "resetting"
@@ -378,7 +378,7 @@ function UsageCard({ provider, compact }: { provider: ProviderUsage; compact?: b
   const progressLines = provider.lines.filter(
     (l): l is UsageLineProgress => l.type === "progress"
   )
-  const textLines = provider.lines.filter(l => l.type === "text" || l.type === "badge")
+  const textLines = provider.lines.filter(l => l.type === "text")
 
   return (
     <div style={{

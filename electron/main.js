@@ -213,6 +213,213 @@ ipcMain.on("resize-window", (event, deltaWidth) => {
   mainWindow.setSize(newWidth, h, false)
 })
 
+// ─── IPC: Provider usage (reads Claude credentials from Keychain, fetches usage) ───
+const { execSync } = require("child_process")
+
+const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
+const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+const CLAUDE_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
+const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+const CLAUDE_SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_servers"
+const REFRESH_BUFFER_MS = 5 * 60 * 1000
+
+// In-memory token cache to avoid hammering Keychain
+let cachedOAuth = null
+let lastUsageData = null
+let lastFetchTime = 0
+
+function readKeychainCredentials() {
+  try {
+    const raw = execSync(
+      `security find-generic-password -s "${CLAUDE_KEYCHAIN_SERVICE}" -w`,
+      { encoding: "utf8", timeout: 5000 }
+    ).trim()
+    const parsed = JSON.parse(raw)
+    return parsed.claudeAiOauth || null
+  } catch {
+    return null
+  }
+}
+
+function writeKeychainCredentials(oauth) {
+  try {
+    // Read full data, update oauth portion, write back
+    const raw = execSync(
+      `security find-generic-password -s "${CLAUDE_KEYCHAIN_SERVICE}" -w`,
+      { encoding: "utf8", timeout: 5000 }
+    ).trim()
+    const full = JSON.parse(raw)
+    full.claudeAiOauth = oauth
+    const json = JSON.stringify(full)
+    // Delete old entry, add new one
+    try { execSync(`security delete-generic-password -s "${CLAUDE_KEYCHAIN_SERVICE}"`, { timeout: 5000 }) } catch {}
+    execSync(`security add-generic-password -s "${CLAUDE_KEYCHAIN_SERVICE}" -a "" -w ${JSON.stringify(json)}`, { timeout: 5000 })
+  } catch (e) {
+    log("[usage] Failed to write keychain: " + e.message)
+  }
+}
+
+async function refreshClaudeToken(oauth) {
+  if (!oauth.refreshToken) return null
+  try {
+    const resp = await fetch(CLAUDE_REFRESH_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        refresh_token: oauth.refreshToken,
+        client_id: CLAUDE_CLIENT_ID,
+        scope: CLAUDE_SCOPES,
+      }),
+    })
+    if (!resp.ok) return null
+    const body = await resp.json()
+    if (!body.access_token) return null
+    oauth.accessToken = body.access_token
+    if (body.refresh_token) oauth.refreshToken = body.refresh_token
+    if (typeof body.expires_in === "number") {
+      oauth.expiresAt = Date.now() + body.expires_in * 1000
+    }
+    cachedOAuth = oauth
+    writeKeychainCredentials(oauth)
+    return oauth.accessToken
+  } catch {
+    return null
+  }
+}
+
+async function fetchClaudeUsage(accessToken) {
+  const resp = await fetch(CLAUDE_USAGE_URL, {
+    method: "GET",
+    headers: {
+      Authorization: "Bearer " + accessToken,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "anthropic-beta": "oauth-2025-04-20",
+    },
+  })
+  if (resp.status === 401 || resp.status === 403) return { authError: true }
+  if (!resp.ok) return null
+  return resp.json()
+}
+
+function formatPlan(oauth) {
+  if (!oauth.subscriptionType) return null
+  const labels = { free: "Free", pro: "Pro", max: "Max", team: "Team", enterprise: "Enterprise" }
+  const base = labels[oauth.subscriptionType] || oauth.subscriptionType
+  const tier = String(oauth.rateLimitTier || "")
+  const m = tier.match(/(\d+)x/)
+  return m ? `${base} ${m[1]}x` : base
+}
+
+ipcMain.handle("get-provider-usage", async () => {
+  try {
+    // Throttle: at most once per 20 seconds
+    if (Date.now() - lastFetchTime < 20000 && lastUsageData) {
+      return lastUsageData
+    }
+
+    // Get credentials
+    let oauth = cachedOAuth || readKeychainCredentials()
+    if (!oauth || !oauth.accessToken) {
+      return { error: "not_logged_in", providers: [] }
+    }
+    cachedOAuth = oauth
+
+    // Refresh if needed
+    const needsRefresh = oauth.expiresAt && (Date.now() > oauth.expiresAt - REFRESH_BUFFER_MS)
+    if (needsRefresh) {
+      const newToken = await refreshClaudeToken(oauth)
+      if (!newToken) {
+        return { error: "refresh_failed", providers: [] }
+      }
+    }
+
+    // Fetch usage
+    let data = await fetchClaudeUsage(oauth.accessToken)
+    if (data && data.authError) {
+      // Try refresh + retry
+      const newToken = await refreshClaudeToken(oauth)
+      if (newToken) {
+        data = await fetchClaudeUsage(newToken)
+      } else {
+        return { error: "auth_failed", providers: [] }
+      }
+    }
+    if (!data || data.authError) {
+      return { error: "fetch_failed", providers: [] }
+    }
+
+    // Build provider output
+    const lines = []
+
+    if (data.five_hour && typeof data.five_hour.utilization === "number") {
+      lines.push({
+        type: "progress",
+        label: "Session",
+        used: data.five_hour.utilization,
+        limit: 100,
+        resetsAt: data.five_hour.resets_at || null,
+      })
+    }
+    if (data.seven_day && typeof data.seven_day.utilization === "number") {
+      lines.push({
+        type: "progress",
+        label: "Weekly",
+        used: data.seven_day.utilization,
+        limit: 100,
+        resetsAt: data.seven_day.resets_at || null,
+      })
+    }
+    if (data.seven_day_sonnet && typeof data.seven_day_sonnet.utilization === "number") {
+      lines.push({
+        type: "progress",
+        label: "Sonnet",
+        used: data.seven_day_sonnet.utilization,
+        limit: 100,
+        resetsAt: data.seven_day_sonnet.resets_at || null,
+      })
+    }
+    if (data.extra_usage && data.extra_usage.is_enabled) {
+      const used = data.extra_usage.used_credits
+      const limit = data.extra_usage.monthly_limit
+      if (typeof used === "number" && typeof limit === "number" && limit > 0) {
+        lines.push({
+          type: "progress",
+          label: "Extra usage",
+          used: used / 100,
+          limit: limit / 100,
+          format: "dollars",
+        })
+      } else if (typeof used === "number" && used > 0) {
+        lines.push({
+          type: "text",
+          label: "Extra usage",
+          value: "$" + (used / 100).toFixed(2),
+        })
+      }
+    }
+
+    const result = {
+      error: null,
+      providers: [{
+        providerId: "claude",
+        displayName: "Claude",
+        plan: formatPlan(oauth),
+        lines,
+        fetchedAt: new Date().toISOString(),
+      }],
+    }
+
+    lastUsageData = result
+    lastFetchTime = Date.now()
+    return result
+  } catch (e) {
+    log("[usage] Error: " + e.message)
+    return { error: e.message, providers: [] }
+  }
+})
+
 // ─── Custom protocol for serving static files in production ───
 // This lets file:// work with absolute /_next/ paths
 protocol.registerSchemesAsPrivileged([

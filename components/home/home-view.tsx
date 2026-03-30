@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import { IrisEyeTracking } from "./iris-eye-tracking"
-import { HOME_SESSION_ID, type ConnectionState, type SessionInfo } from "@/hooks/use-hermes-bridge"
+import { type ConnectionState, type SessionInfo } from "@/hooks/use-hermes-bridge"
+import { useOpenUsage, type ProviderUsage, type UsageLineProgress } from "@/hooks/use-openusage"
 
 /* ─── Notification Type ─── */
 export type NotificationType = "info" | "success" | "warning" | "error" | "approval"
@@ -71,11 +72,7 @@ export default function HomeView({
   onNewSession,
 }: HomeViewProps) {
   const [notifications] = React.useState<HomeNotification[]>(getMockNotifications)
-
-  const stats = React.useMemo(() => ({
-    sessions: sessionsList.filter(s => s.id !== HOME_SESSION_ID).length,
-    messages: sessionsList.reduce((sum, s) => sum + (s.message_count || 0), 0),
-  }), [sessionsList])
+  const { providers, isAvailable: usageAvailable } = useOpenUsage()
 
   const isError = connectionState !== "connected"
   const statusLabel = isError ? "Offline" : isProcessing ? "Processing" : "Watching"
@@ -137,39 +134,20 @@ export default function HomeView({
           </span>
         </div>
 
-        {/* ─── Stats ─── */}
-        <div style={{
-          display: "flex",
-          gap: isMobile ? 16 : 32,
-          justifyContent: "center",
-        }}>
-          {[
-            { value: stats.sessions, label: "sessions" },
-            { value: stats.messages, label: "messages" },
-          ].map(s => (
-            <div key={s.label} style={{ textAlign: "center" as const }}>
-              <div style={{
-                fontSize: isMobile ? 20 : 26,
-                fontWeight: 600,
-                color: "rgba(255,255,255,0.8)",
-                fontFamily: "var(--font-geist-mono), monospace",
-                lineHeight: 1,
-              }}>
-                {s.value}
-              </div>
-              <div style={{
-                fontSize: 9,
-                fontWeight: 500,
-                textTransform: "uppercase" as const,
-                letterSpacing: "0.08em",
-                color: "rgba(255,255,255,0.18)",
-                marginTop: 4,
-              }}>
-                {s.label}
-              </div>
-            </div>
-          ))}
-        </div>
+        {/* ─── Provider Usage ─── */}
+        {usageAvailable && providers.length > 0 && (
+          <div style={{
+            width: "100%",
+            maxWidth: 400,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}>
+            {providers.map(p => (
+              <UsageCard key={p.providerId} provider={p} compact={isMobile} />
+            ))}
+          </div>
+        )}
 
         {/* ─── Command bar ─── */}
         <button
@@ -260,6 +238,151 @@ export default function HomeView({
         </div>
 
       </div>
+    </div>
+  )
+}
+
+
+/* ═══════════════════════════════════════════════
+   Usage Card — renders one OpenUsage provider
+   ═══════════════════════════════════════════════ */
+
+function getBarColor(pct: number): string {
+  if (pct >= 90) return "rgba(239,68,68,0.7)"
+  if (pct >= 70) return "rgba(245,158,11,0.6)"
+  return "rgba(255,255,255,0.25)"
+}
+
+function formatResetTime(resetsAt?: string): string {
+  if (!resetsAt) return ""
+  const diff = new Date(resetsAt).getTime() - Date.now()
+  if (diff <= 0) return "resetting"
+  const hrs = Math.floor(diff / 3_600_000)
+  const mins = Math.floor((diff % 3_600_000) / 60_000)
+  if (hrs > 0) return `${hrs}h ${mins}m`
+  return `${mins}m`
+}
+
+function UsageCard({ provider, compact }: { provider: ProviderUsage; compact?: boolean }) {
+  const progressLines = provider.lines.filter(
+    (l): l is UsageLineProgress => l.type === "progress"
+  )
+  const textLines = provider.lines.filter(l => l.type === "text" || l.type === "badge")
+
+  return (
+    <div style={{
+      padding: compact ? "8px 10px" : "10px 14px",
+      borderRadius: 8,
+      background: "rgba(255,255,255,0.02)",
+      border: "1px solid rgba(255,255,255,0.04)",
+      transition: "border-color 150ms ease",
+    }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)" }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.04)" }}
+    >
+      {/* Header: provider name + plan */}
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: progressLines.length > 0 ? 8 : 0,
+      }}>
+        <span style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: "rgba(255,255,255,0.65)",
+          letterSpacing: "0.01em",
+        }}>
+          {provider.displayName}
+        </span>
+        {provider.plan && (
+          <span style={{
+            fontSize: 9,
+            color: "rgba(255,255,255,0.2)",
+            fontFamily: "var(--font-geist-mono), monospace",
+          }}>
+            {provider.plan}
+          </span>
+        )}
+      </div>
+
+      {/* Progress bars */}
+      {progressLines.map((line, i) => {
+        const pct = line.limit > 0 ? Math.min((line.used / line.limit) * 100, 100) : 0
+        const resetStr = formatResetTime(line.resetsAt)
+        return (
+          <div key={i} style={{ marginBottom: i < progressLines.length - 1 ? 6 : 0 }}>
+            <div style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              marginBottom: 3,
+            }}>
+              <span style={{
+                fontSize: 10,
+                color: "rgba(255,255,255,0.3)",
+              }}>
+                {line.label}
+              </span>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{
+                  fontSize: 10,
+                  color: "rgba(255,255,255,0.4)",
+                  fontFamily: "var(--font-geist-mono), monospace",
+                }}>
+                  {Math.round(pct)}%
+                </span>
+                {resetStr && (
+                  <span style={{
+                    fontSize: 9,
+                    color: "rgba(255,255,255,0.12)",
+                    fontFamily: "var(--font-geist-mono), monospace",
+                  }}>
+                    {resetStr}
+                  </span>
+                )}
+              </div>
+            </div>
+            {/* Bar */}
+            <div style={{
+              width: "100%",
+              height: 3,
+              borderRadius: 2,
+              background: "rgba(255,255,255,0.04)",
+              overflow: "hidden",
+            }}>
+              <div style={{
+                width: `${pct}%`,
+                height: "100%",
+                borderRadius: 2,
+                background: getBarColor(pct),
+                transition: "width 600ms ease, background 300ms ease",
+              }} />
+            </div>
+          </div>
+        )
+      })}
+
+      {/* Text/badge lines */}
+      {textLines.length > 0 && (
+        <div style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "4px 12px",
+          marginTop: progressLines.length > 0 ? 6 : 0,
+        }}>
+          {textLines.map((line, i) => (
+            <span key={i} style={{
+              fontSize: 10,
+              color: "rgba(255,255,255,0.25)",
+              fontFamily: "var(--font-geist-mono), monospace",
+            }}>
+              <span style={{ color: "rgba(255,255,255,0.15)" }}>{line.label}: </span>
+              {"value" in line ? line.value : ""}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

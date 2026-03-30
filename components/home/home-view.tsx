@@ -16,8 +16,8 @@ type ProviderDef = {
 
 const PROVIDERS: ProviderDef[] = [
   { id: "claude", label: "Claude", model: "claude-opus-4-6", provider: "anthropic", usageId: "claude" },
+  { id: "codex", label: "Codex", model: "codex-mini", provider: "openai", usageId: "codex" },
   { id: "gemini", label: "Gemini", model: "gemini-2.5-pro", provider: "google", usageId: "gemini" },
-  { id: "openrouter", label: "OpenRouter", model: "anthropic/claude-sonnet-4", provider: "openrouter" },
 ]
 
 /* ─── Real SVG logos (white, currentColor) ─── */
@@ -38,21 +38,18 @@ function GeminiLogo() {
   )
 }
 
-function OpenRouterLogo() {
+function CodexLogo() {
   return (
-    <svg width="16" height="16" viewBox="0 0 512 512" fill="currentColor" stroke="currentColor">
-      <path d="M3 248.945C18 248.945 76 236 106 219C136 202 136 202 198 158C276.497 102.293 332 120.945 423 120.945" strokeWidth="60" fill="none"/>
-      <path d="M511 121.5L357.25 210.268L357.25 32.7324L511 121.5Z"/>
-      <path d="M0 249C15 249 73 261.945 103 278.945C133 295.945 133 295.945 195 339.945C273.497 395.652 329 377 420 377" strokeWidth="60" fill="none"/>
-      <path d="M508 376.445L354.25 287.678L354.25 465.213L508 376.445Z"/>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+      <path d="M22.282 9.821a5.985 5.985 0 00-.516-4.91 6.046 6.046 0 00-6.51-2.9A6.065 6.065 0 0011.05.17 6.018 6.018 0 004.28 4.16a5.975 5.975 0 00-3.993 2.9 6.046 6.046 0 00.743 7.097 5.98 5.98 0 00.51 4.911 6.051 6.051 0 006.515 2.9A5.985 5.985 0 0012.95 23.83a6.018 6.018 0 006.772-3.99 5.97 5.97 0 003.997-2.9 6.042 6.042 0 00-.737-7.119zM12.95 22.27a4.49 4.49 0 01-2.89-1.045l.147-.084 4.794-2.77a.78.78 0 00.395-.678v-6.76l2.027 1.17a.072.072 0 01.039.052v5.601a4.508 4.508 0 01-4.512 4.514zm-9.69-4.141a4.49 4.49 0 01-.54-3.015l.148.088 4.794 2.77a.78.78 0 00.788 0l5.853-3.38v2.34a.072.072 0 01-.029.062l-4.847 2.799a4.504 4.504 0 01-6.167-1.664zM2.103 7.871a4.491 4.491 0 012.35-1.97l-.003.168v5.539a.78.78 0 00.395.676l5.852 3.379-2.026 1.17a.072.072 0 01-.068.006L3.754 14.04A4.508 4.508 0 012.103 7.87zm16.646 3.881l-5.852-3.38 2.026-1.17a.072.072 0 01.068-.005l4.848 2.799a4.504 4.504 0 01-.696 8.137v-5.706a.78.78 0 00-.394-.675zm2.016-3.024l-.148-.088-4.794-2.77a.78.78 0 00-.788 0L9.182 9.25V6.91a.072.072 0 01.029-.062l4.847-2.798a4.504 4.504 0 016.707 4.678zM8.093 12.75l-2.027-1.17a.072.072 0 01-.039-.053V5.926a4.504 4.504 0 017.4-3.454l-.148.084-4.793 2.77a.78.78 0 00-.396.677l-.003 6.747zm1.1-2.373l2.607-1.505 2.607 1.505v3.01l-2.607 1.505-2.607-1.505V10.377z" fill="currentColor"/>
     </svg>
   )
 }
 
 const LOGO_MAP: Record<string, React.FC> = {
   claude: ClaudeLogo,
+  codex: CodexLogo,
   gemini: GeminiLogo,
-  openrouter: OpenRouterLogo,
 }
 
 /* ─── Props ─── */

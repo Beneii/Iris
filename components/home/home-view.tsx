@@ -3,20 +3,52 @@
 import * as React from "react"
 import { IrisEyeTracking } from "./iris-eye-tracking"
 import { type ConnectionState, type SessionInfo } from "@/hooks/use-hermes-bridge"
-import { useProviderUsage, type ProviderUsage, type UsageLineProgress } from "@/hooks/use-openusage"
+import { useProviderUsage, type UsageLineProgress } from "@/hooks/use-openusage"
 
-/* ─── Notification Type ─── */
-export type NotificationType = "info" | "success" | "warning" | "error" | "approval"
-
-export type HomeNotification = {
+/* ─── Provider definitions ─── */
+type ProviderDef = {
   id: string
-  type: NotificationType
-  title: string
-  body?: string
-  sessionId?: string
-  source: string
-  timestamp: number
-  read: boolean
+  label: string
+  model: string
+  provider: string
+  usageId?: string
+}
+
+const PROVIDERS: ProviderDef[] = [
+  { id: "claude", label: "Claude", model: "claude-opus-4-6", provider: "anthropic", usageId: "claude" },
+  { id: "gemini", label: "Gemini", model: "gemini-2.5-pro", provider: "google", usageId: "gemini" },
+  { id: "openrouter", label: "OpenRouter", model: "anthropic/claude-sonnet-4", provider: "openrouter" },
+]
+
+/* ─── SVG logos (white, 20×20) ─── */
+function ClaudeLogo({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M16.009 8.06l-5.89 8.05h-2.31L13.699 8.06h2.31zm-8.018 8.05l5.89-8.05h2.31L10.301 16.11H7.991z" fill="currentColor" />
+    </svg>
+  )
+}
+
+function GeminiLogo({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M12 2C12 2 14.5 7.5 17.5 10.5C20.5 13.5 22 16 22 16C22 16 16.5 13.5 13.5 13.5C10.5 13.5 2 22 2 22C2 22 9.5 14.5 9.5 11.5C9.5 8.5 12 2 12 2Z" fill="currentColor" />
+    </svg>
+  )
+}
+
+function OpenRouterLogo({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M12 3L3 8v8l9 5 9-5V8l-9-5zm0 2.18L18.36 8.5 12 11.82 5.64 8.5 12 5.18zM5 9.82l6 3.33v6.03l-6-3.33V9.82zm8 9.36v-6.03l6-3.33v6.03l-6 3.33z" fill="currentColor" />
+    </svg>
+  )
+}
+
+const LOGO_MAP: Record<string, React.FC<{ size?: number }>> = {
+  claude: ClaudeLogo,
+  gemini: GeminiLogo,
+  openrouter: OpenRouterLogo,
 }
 
 /* ─── Props ─── */
@@ -28,6 +60,9 @@ interface HomeViewProps {
   isMobile?: boolean
   resumeSession: (id: string) => void
   onNewSession: () => void
+  model: string
+  provider: string
+  setConfig: (key: string, value: unknown) => void
 }
 
 /* ─── Helpers ─── */
@@ -40,25 +75,10 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)}d`
 }
 
-const NOTIF_ICON: Record<NotificationType, string> = {
-  info: "◆", success: "✔", warning: "⚠", error: "✖", approval: "◎",
-}
-const NOTIF_COLOR: Record<NotificationType, string> = {
-  info: "rgba(255,255,255,0.35)",
-  success: "#34C759",
-  warning: "#F59E0B",
-  error: "#EF4444",
-  approval: "#5BA4F6",
-}
-
-/* ─── Mock notifications ─── */
-function getMockNotifications(): HomeNotification[] {
-  const now = Date.now() / 1000
-  return [
-    { id: "n1", type: "success", title: "Self-improvement completed", body: "3 learnings, 1 skill updated", source: "daemon", timestamp: now - 7200, read: false },
-    { id: "n2", type: "info", title: "Memory decay ran", body: "2 flagged, 0 removed", source: "daemon", timestamp: now - 14400, read: true },
-    { id: "n3", type: "approval", title: "Push to main?", body: "iris-home-view branch", sessionId: "session-def", source: "session", timestamp: now - 3600, read: false },
-  ]
+function getBarColor(pct: number): string {
+  if (pct >= 90) return "rgba(239,68,68,0.7)"
+  if (pct >= 70) return "rgba(245,158,11,0.6)"
+  return "rgba(255,255,255,0.3)"
 }
 
 /* ─── Component ─── */
@@ -70,13 +90,28 @@ export default function HomeView({
   isMobile = false,
   resumeSession,
   onNewSession,
+  model,
+  provider,
+  setConfig,
 }: HomeViewProps) {
-  const [notifications] = React.useState<HomeNotification[]>(getMockNotifications)
-  const { providers, isAvailable: usageAvailable } = useProviderUsage()
+  const { providers: usageProviders, isAvailable: usageAvailable } = useProviderUsage()
+
+  const switchProvider = React.useCallback((def: ProviderDef) => {
+    setConfig("model.default", def.model)
+    setConfig("model.provider", def.provider)
+  }, [setConfig])
 
   const isError = connectionState !== "connected"
   const statusLabel = isError ? "Offline" : isProcessing ? "Processing" : "Watching"
   const statusColor = isError ? "#EF4444" : isProcessing ? "#5BA4F6" : "rgba(255,255,255,0.25)"
+
+  // Real recent sessions (exclude home, limit to 5)
+  const recentSessions = React.useMemo(() => {
+    return sessionsList
+      .filter(s => s.id !== "home" && s.preview)
+      .sort((a, b) => b.last_active - a.last_active)
+      .slice(0, 5)
+  }, [sessionsList])
 
   return (
     <div className="home-enter" style={{
@@ -108,9 +143,9 @@ export default function HomeView({
         alignItems: "center",
         justifyContent: "center",
         padding: isMobile ? "12px 20px" : "24px 32px",
-        gap: isMobile ? 16 : 24,
+        gap: isMobile ? 20 : 28,
         position: "relative",
-        maxWidth: 560,
+        maxWidth: 480,
         margin: "0 auto",
         width: "100%",
       }}>
@@ -118,7 +153,7 @@ export default function HomeView({
         {/* ─── Eye ─── */}
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: isMobile ? 6 : 10 }}>
           <IrisEyeTracking
-            size={isMobile ? 100 : 180}
+            size={isMobile ? 100 : 160}
             status={isError ? "error" : isProcessing ? "processing" : "idle"}
             connectionState={connectionState}
           />
@@ -134,24 +169,97 @@ export default function HomeView({
           </span>
         </div>
 
-        {/* ─── Provider Usage + Quick Switch ─── */}
+        {/* ─── Provider selector with usage bars ─── */}
         <div style={{
-          width: "100%",
-          maxWidth: 400,
           display: "flex",
-          flexDirection: "column",
-          gap: 10,
+          gap: isMobile ? 20 : 32,
+          justifyContent: "center",
         }}>
-          {/* Usage cards from OpenUsage */}
-          {usageAvailable && providers.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {providers.map(p => (
-                <UsageCard key={p.providerId} provider={p} compact={isMobile} />
-              ))}
-            </div>
-          )}
+          {PROVIDERS.map(def => {
+            const isActive = provider === def.provider
+              && model.includes(def.model.split("/").pop() || def.model)
+            const Logo = LOGO_MAP[def.id]
 
+            // Get usage bar for this provider
+            const usage = usageAvailable
+              ? usageProviders.find(u => u.providerId === def.usageId)
+              : undefined
+            const mainProgress = usage?.lines.find(
+              (l): l is UsageLineProgress => l.type === "progress"
+            )
+            const pct = mainProgress && mainProgress.limit > 0
+              ? Math.min((mainProgress.used / mainProgress.limit) * 100, 100)
+              : null
 
+            return (
+              <button
+                key={def.id}
+                onClick={() => { if (!isActive) switchProvider(def) }}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 6,
+                  background: "none",
+                  border: "none",
+                  cursor: isActive ? "default" : "pointer",
+                  padding: "4px 0",
+                  minWidth: 56,
+                }}
+              >
+                {/* Logo */}
+                <div style={{
+                  color: isActive ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.2)",
+                  transition: "color 200ms ease",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 32,
+                  height: 32,
+                }}>
+                  {Logo && <Logo size={22} />}
+                </div>
+
+                {/* Label */}
+                <span style={{
+                  fontSize: 9,
+                  fontWeight: isActive ? 600 : 400,
+                  letterSpacing: "0.04em",
+                  color: isActive ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.18)",
+                  transition: "color 200ms ease",
+                  textTransform: "uppercase" as const,
+                }}>
+                  {def.label}
+                </span>
+
+                {/* Usage bar */}
+                <div style={{
+                  width: 48,
+                  height: 2,
+                  borderRadius: 1,
+                  background: "rgba(255,255,255,0.04)",
+                  overflow: "hidden",
+                }}>
+                  {pct !== null ? (
+                    <div style={{
+                      width: `${pct}%`,
+                      height: "100%",
+                      borderRadius: 1,
+                      background: isActive ? getBarColor(pct) : "rgba(255,255,255,0.1)",
+                      transition: "width 600ms ease",
+                    }} />
+                  ) : isActive ? (
+                    <div style={{
+                      width: "100%",
+                      height: "100%",
+                      borderRadius: 1,
+                      background: "rgba(255,255,255,0.12)",
+                    }} />
+                  ) : null}
+                </div>
+              </button>
+            )
+          })}
         </div>
 
         {/* ─── Command bar ─── */}
@@ -159,7 +267,7 @@ export default function HomeView({
           onClick={onNewSession}
           style={{
             width: "100%",
-            maxWidth: 400,
+            maxWidth: 380,
             padding: "10px 16px",
             borderRadius: 10,
             border: "1px solid rgba(255,255,255,0.06)",
@@ -186,208 +294,74 @@ export default function HomeView({
           Ask {agentName} anything...
         </button>
 
-        {/* ─── Activity feed ─── */}
-        <div style={{ width: "100%", maxWidth: 400 }}>
-          <div style={{
-            fontSize: 9,
-            fontWeight: 600,
-            textTransform: "uppercase" as const,
-            letterSpacing: "0.08em",
-            color: "rgba(255,255,255,0.15)",
-            marginBottom: 8,
-          }}>
-            Activity
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-            {notifications.slice(0, isMobile ? 3 : 4).map(n => (
-              <button
-                key={n.id}
-                onClick={() => n.sessionId && resumeSession(n.sessionId)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: isMobile ? "5px 6px" : "7px 8px",
-                  borderRadius: 6,
-                  background: "transparent",
-                  border: "none",
-                  cursor: n.sessionId ? "pointer" : "default",
-                  textAlign: "left" as const,
-                  width: "100%",
-                  transition: "background 100ms ease",
-                }}
-                onMouseEnter={e => { if (n.sessionId) e.currentTarget.style.background = "rgba(255,255,255,0.03)" }}
-                onMouseLeave={e => { e.currentTarget.style.background = "transparent" }}
-              >
-                <span style={{ fontSize: 10, color: NOTIF_COLOR[n.type], width: 12, textAlign: "center" as const, flexShrink: 0 }}>
-                  {NOTIF_ICON[n.type]}
-                </span>
-                <span style={{
-                  fontSize: 12,
-                  color: n.read ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.55)",
-                  fontWeight: n.read ? 400 : 500,
-                  flex: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap" as const,
-                }}>
-                  {n.title}
-                </span>
-                <span style={{ fontSize: 10, color: "rgba(255,255,255,0.1)", flexShrink: 0 }}>
-                  {relativeTime(n.timestamp)}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-      </div>
-    </div>
-  )
-}
-
-
-/* ═══════════════════════════════════════════════
-   Usage Card — renders one OpenUsage provider
-   ═══════════════════════════════════════════════ */
-
-function getBarColor(pct: number): string {
-  if (pct >= 90) return "rgba(239,68,68,0.7)"
-  if (pct >= 70) return "rgba(245,158,11,0.6)"
-  return "rgba(255,255,255,0.25)"
-}
-
-function formatResetTime(resetsAt?: string | null): string {
-  if (!resetsAt) return ""
-  const diff = new Date(resetsAt).getTime() - Date.now()
-  if (diff <= 0) return "resetting"
-  const hrs = Math.floor(diff / 3_600_000)
-  const mins = Math.floor((diff % 3_600_000) / 60_000)
-  if (hrs > 0) return `${hrs}h ${mins}m`
-  return `${mins}m`
-}
-
-function UsageCard({ provider, compact }: { provider: ProviderUsage; compact?: boolean }) {
-  const progressLines = provider.lines.filter(
-    (l): l is UsageLineProgress => l.type === "progress"
-  )
-  const textLines = provider.lines.filter(l => l.type === "text")
-
-  return (
-    <div style={{
-      padding: compact ? "8px 10px" : "10px 14px",
-      borderRadius: 8,
-      background: "rgba(255,255,255,0.02)",
-      border: "1px solid rgba(255,255,255,0.04)",
-      transition: "border-color 150ms ease",
-    }}
-      onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)" }}
-      onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.04)" }}
-    >
-      {/* Header: provider name + plan */}
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: progressLines.length > 0 ? 8 : 0,
-      }}>
-        <span style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: "rgba(255,255,255,0.65)",
-          letterSpacing: "0.01em",
-        }}>
-          {provider.displayName}
-        </span>
-        {provider.plan && (
-          <span style={{
-            fontSize: 9,
-            color: "rgba(255,255,255,0.2)",
-            fontFamily: "var(--font-geist-mono), monospace",
-          }}>
-            {provider.plan}
-          </span>
-        )}
-      </div>
-
-      {/* Progress bars */}
-      {progressLines.map((line, i) => {
-        const pct = line.limit > 0 ? Math.min((line.used / line.limit) * 100, 100) : 0
-        const resetStr = formatResetTime(line.resetsAt)
-        return (
-          <div key={i} style={{ marginBottom: i < progressLines.length - 1 ? 6 : 0 }}>
+        {/* ─── Recent activity (real sessions) ─── */}
+        {recentSessions.length > 0 && (
+          <div style={{ width: "100%", maxWidth: 380 }}>
             <div style={{
-              display: "flex",
-              alignItems: "baseline",
-              justifyContent: "space-between",
-              marginBottom: 3,
+              fontSize: 9,
+              fontWeight: 600,
+              textTransform: "uppercase" as const,
+              letterSpacing: "0.08em",
+              color: "rgba(255,255,255,0.12)",
+              marginBottom: 6,
             }}>
-              <span style={{
-                fontSize: 10,
-                color: "rgba(255,255,255,0.3)",
-              }}>
-                {line.label}
-              </span>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                <span style={{
-                  fontSize: 10,
-                  color: "rgba(255,255,255,0.4)",
-                  fontFamily: "var(--font-geist-mono), monospace",
-                }}>
-                  {Math.round(pct)}%
-                </span>
-                {resetStr && (
+              Recent
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {recentSessions.map(s => (
+                <button
+                  key={s.id}
+                  onClick={() => resumeSession(s.id)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    textAlign: "left" as const,
+                    width: "100%",
+                    transition: "background 100ms ease",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)" }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "transparent" }}
+                >
+                  {/* Dot */}
                   <span style={{
-                    fontSize: 9,
-                    color: "rgba(255,255,255,0.12)",
-                    fontFamily: "var(--font-geist-mono), monospace",
+                    width: 4, height: 4, borderRadius: "50%",
+                    background: "rgba(255,255,255,0.12)", flexShrink: 0,
+                  }} />
+                  {/* Title/preview */}
+                  <span style={{
+                    fontSize: 12,
+                    color: "rgba(255,255,255,0.4)",
+                    fontWeight: 400,
+                    flex: 1,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap" as const,
                   }}>
-                    {resetStr}
+                    {s.title || s.preview}
                   </span>
-                )}
-              </div>
-            </div>
-            {/* Bar */}
-            <div style={{
-              width: "100%",
-              height: 3,
-              borderRadius: 2,
-              background: "rgba(255,255,255,0.04)",
-              overflow: "hidden",
-            }}>
-              <div style={{
-                width: `${pct}%`,
-                height: "100%",
-                borderRadius: 2,
-                background: getBarColor(pct),
-                transition: "width 600ms ease, background 300ms ease",
-              }} />
+                  {/* Time */}
+                  <span style={{
+                    fontSize: 10,
+                    color: "rgba(255,255,255,0.1)",
+                    fontFamily: "var(--font-geist-mono), monospace",
+                    flexShrink: 0,
+                  }}>
+                    {relativeTime(s.last_active)}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
-        )
-      })}
+        )}
 
-      {/* Text/badge lines */}
-      {textLines.length > 0 && (
-        <div style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "4px 12px",
-          marginTop: progressLines.length > 0 ? 6 : 0,
-        }}>
-          {textLines.map((line, i) => (
-            <span key={i} style={{
-              fontSize: 10,
-              color: "rgba(255,255,255,0.25)",
-              fontFamily: "var(--font-geist-mono), monospace",
-            }}>
-              <span style={{ color: "rgba(255,255,255,0.15)" }}>{line.label}: </span>
-              {"value" in line ? line.value : ""}
-            </span>
-          ))}
-        </div>
-      )}
+      </div>
     </div>
   )
 }

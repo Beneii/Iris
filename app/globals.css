@@ -1,130 +1,522 @@
 @import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+html, body {
+  overscroll-behavior: none;
+  overflow: hidden;
+}
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  /* ─── Surface layers ─── */
+  --color-surface: #0C0C0E;
+  --color-canvas: #111113;
+  --color-elevated: #1A1A1F;
+
+  /* ─── Iris spectrum ─── */
+  --color-iris-purple: #FFFFFF;
+  --color-iris-blue: #5BA4F6;
+  --color-iris-teal: #5BF6C8;
+  --color-iris-green: #5BF68A;
+  --color-iris-gold: #F6D55B;
+  --color-iris-rose: #F65B8A;
+
+  /* ─── Status ─── */
+  --color-status-success: #34C759;
+  --color-status-error: #EF4444;
+  --color-status-warning: #F59E0B;
+
+  /* ─── Text hierarchy ─── */
+  --color-text-primary: rgba(255, 255, 255, 0.88);
+  --color-text-secondary: rgba(255, 255, 255, 0.55);
+  --color-text-tertiary: rgba(255, 255, 255, 0.3);
+  --color-text-quaternary: rgba(255, 255, 255, 0.12);
+
+  /* ─── Borders & backgrounds ─── */
+  --color-border-dim: rgba(255, 255, 255, 0.06);
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-active-bg: rgba(255, 255, 255, 0.05);
+
+  /* ─── Fonts ─── */
   --font-sans: var(--font-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
-}
-
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html, body {
+    overflow: hidden;
+    max-width: 100vw;
   }
   body {
-    @apply bg-background text-foreground;
+    background-color: var(--color-canvas);
+    color: var(--color-text-primary);
+    margin: 0;
+    /* Prevent text selection on UI chrome — allow on message content only */
+    -webkit-user-select: none;
+    user-select: none;
   }
   html {
-    @apply font-sans;
+    font-family: var(--font-sans), system-ui, sans-serif;
   }
+  /* Prevent iOS from zooming in on focused inputs */
+  input, textarea, select {
+    font-size: max(16px, 1em);
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  /* Eliminate 300ms tap delay on all interactive elements */
+  button, [role="button"], a, input, textarea, select, label {
+    touch-action: manipulation;
+  }
+  /* Allow text selection on message content */
+  .message-content {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+/* ─── Typing dots (thinking indicator) ─── */
+@keyframes typing-dot {
+  0%, 60%, 100% { opacity: 0.2; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
+/* ─── Streaming text chunk fade-in ─── */
+@keyframes chunk-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.text-chunk-in {
+  animation: chunk-in 150ms ease-out;
+}
+
+/* ─── Typing cursor ─── */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  background: rgba(255,255,255,0.4);
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  animation: cursor-blink 1s step-end infinite;
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ─── Streaming pulse ─── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ─── Iridescent thinking shimmer ─── */
+@keyframes thinking-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.thinking-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 0%,
+    rgba(91, 164, 246, 0.10) 25%,
+    rgba(91, 246, 200, 0.08) 50%,
+    rgba(91, 164, 246, 0.10) 75%,
+    rgba(255, 255, 255, 0.05) 100%
+  );
+  background-size: 200% 100%;
+  animation: thinking-shimmer 2.5s ease-in-out infinite;
+}
+
+/* ─── Skeleton loading ─── */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.skeleton-bar {
+  animation: skeleton-pulse 1.8s ease-in-out infinite;
+}
+.skeleton-bar:nth-child(2) { animation-delay: 0.15s; }
+.skeleton-bar:nth-child(3) { animation-delay: 0.3s; }
+
+/* ─── Activity entry fade-in ─── */
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.activity-entry {
+  animation: slide-in 0.25s ease-out;
+}
+
+/* Tool call inline expand */
+@keyframes tool-expand {
+  from {
+    opacity: 0;
+    max-height: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 200px;
+    margin-top: 2px;
+    margin-bottom: 2px;
+  }
+}
+
+.tool-inline-enter {
+  animation: tool-expand 0.3s ease-out forwards;
+  overflow: hidden;
+}
+
+/* ─── Message fade-in ─── */
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message-entry {
+  animation: message-in 200ms ease-out;
+}
+
+/* Smooth scroll behavior for messages container */
+.messages-scroll {
+  scroll-behavior: smooth;
+}
+
+/* ─── Status dot pulse for running tools ─── */
+@keyframes dot-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0);
+  }
+}
+
+.dot-running {
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+
+/* ─── Error dot pulse ─── */
+@keyframes dot-error-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0);
+  }
+}
+
+.dot-error {
+  animation: dot-error-pulse 2s ease-in-out infinite;
+}
+
+/* ─── Success dot fade-in ─── */
+@keyframes dot-success-in {
+  from { transform: scale(0); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.dot-success {
+  animation: dot-success-in 0.3s ease-out;
+}
+
+/* ─── Pending dot gentle pulse ─── */
+@keyframes dot-pending-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0);
+  }
+}
+
+.dot-pending {
+  animation: dot-pending-pulse 2.5s ease-in-out infinite;
+}
+
+/* ─── Preparing tool (rotating border) ─── */
+@keyframes preparing-spin {
+  to { transform: rotate(360deg); }
+}
+
+.dot-preparing {
+  position: relative;
+}
+.dot-preparing::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  border-top-color: rgba(255, 255, 255, 0.4);
+  animation: preparing-spin 1s linear infinite;
+}
+
+/* ─── Iris gradient glow (for focus states) ─── */
+@keyframes iris-glow {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(255, 255, 255, 0.15), 0 0 4px rgba(91, 164, 246, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(91, 246, 200, 0.12), 0 0 6px rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ─── Command palette slide-up ─── */
+@keyframes palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.palette-enter {
+  animation: palette-in 0.15s ease-out;
+}
+
+/* ─── Send button hover ─── */
+.send-btn {
+  transition: background 150ms ease, transform 100ms ease, box-shadow 200ms ease;
+}
+.send-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.25);
+}
+.send-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+/* ─── Session row hover ─── */
+.session-row {
+  transition: background 120ms ease;
+}
+
+/* ─── Composer input ─── */
+.composer-input {
+  -webkit-appearance: none;
+  appearance: none;
+  padding: 0 !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+  -webkit-padding-start: 0 !important;
+  -webkit-padding-end: 0 !important;
+  -webkit-padding-before: 0 !important;
+  -webkit-padding-after: 0 !important;
+  -webkit-text-size-adjust: 100%;
+}
+.composer-input::placeholder {
+  color: rgba(255, 255, 255, 0.15);
+  transition: color 200ms ease;
+  line-height: 20px;
+}
+.composer-input:focus::placeholder {
+  color: rgba(255, 255, 255, 0.08);
+}
+
+/* ─── Composer wrapper focus glow ─── */
+.composer-wrapper {
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+  border: 1px solid transparent;
+}
+@supports not (backdrop-filter: blur(20px)) {
+  .composer-wrapper {
+    background: rgba(26, 26, 31, 0.95) !important;
+  }
+}
+.composer-wrapper:focus-within {
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 0 20px rgba(255, 255, 255, 0.06);
+}
+
+/* ─── Reasoning trace expand/collapse ─── */
+@keyframes reasoning-expand {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 200px;
+  }
+}
+
+.reasoning-content {
+  animation: reasoning-expand 0.2s ease-out;
+  overflow: hidden;
+}
+
+/* ─── Context pressure bar ─── */
+.pressure-bar-fill {
+  transition: width 500ms ease-out, background 300ms ease;
+}
+
+/* ─── Connection status transition ─── */
+.status-dot {
+  transition: background 300ms ease, box-shadow 300ms ease;
+}
+
+/* ─── Subtle border glow on active session ─── */
+.active-session {
+  border-left: 2px solid transparent;
+  background-image: linear-gradient(var(--color-active-bg), var(--color-active-bg)),
+    linear-gradient(180deg, var(--color-iris-purple), var(--color-iris-teal));
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+}
+
+/* ─── Approval action hover ─── */
+.approve-action {
+  transition: opacity 150ms ease;
+}
+.approve-action:hover {
+  opacity: 0.8;
+}
+
+/* ─── New session button ─── */
+.new-session-btn {
+  transition: border-color 150ms ease, color 150ms ease;
+}
+.new-session-btn:hover {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+/* ─── Iris gradient text utility ─── */
+.iris-gradient-text {
+  background: linear-gradient(135deg, rgba(255,255,255,0.7), #5BA4F6, #5BF6C8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Iris progress bar ─── */
+@keyframes iris-progress {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ─── Selection color ─── */
+::selection {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ─── Page load fade-in ─── */
+@keyframes page-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.page-enter {
+  animation: page-fade-in 0.3s ease-out;
+}
+
+/* ─── Session switch crossfade ─── */
+@keyframes crossfade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.messages-enter {
+  animation: crossfade-in 0.2s ease-out;
+}
+
+/* ─── Tool completion flash ─── */
+@keyframes success-flash {
+  0% { box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.4); }
+  50% { box-shadow: 0 0 8px 2px rgba(52, 199, 89, 0.3); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
+}
+
+.dot-success {
+  animation: dot-success-in 0.3s ease-out, success-flash 0.6s ease-out 0.3s;
+}
+
+/* ─── Drag-over state for composer ─── */
+.composer-dragover {
+  border-color: rgba(255, 255, 255, 0.4) !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+
+/* ─── Attachment strip slide-in ─── */
+@keyframes attachment-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.attachment-item {
+  animation: attachment-in 0.2s ease-out;
+}
+
+/* ─── Hover state utilities ─── */
+.hover-brighten {
+  transition: color 150ms ease, background 150ms ease;
+}
+.hover-brighten:hover {
+  color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* ─── Iris eye sparkle pulse (processing) ─── */
+@keyframes sparkle-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.92); }
+}
+
+.iris-sparkle-pulse {
+  animation: sparkle-pulse 1.5s ease-in-out infinite;
+  transform-origin: 160px 100px;
+}
+
+/* ─── Home notification hover ─── */
+.home-notification {
+  position: relative;
+  transition: background 120ms ease;
+}
+
+/* ─── Home dashboard fade-in ─── */
+@keyframes home-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.home-enter {
+  animation: home-fade-in 0.4s ease-out;
 }

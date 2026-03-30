@@ -459,6 +459,8 @@ export default function HomePage() {
             model={model}
             provider={provider}
             setConfig={setConfig}
+            contextPressure={contextPressure}
+            activities={activities}
           />
         ) : (
           <>

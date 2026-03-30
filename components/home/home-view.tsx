@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { IrisEyeTracking } from "./iris-eye-tracking"
-import { type ConnectionState, type SessionInfo } from "@/hooks/use-hermes-bridge"
+import { type ConnectionState, type SessionInfo, type ActivityEntry } from "@/hooks/use-hermes-bridge"
 import { useProviderUsage, type UsageLineProgress } from "@/hooks/use-openusage"
 
 /* ─── Provider definitions ─── */
@@ -20,32 +20,36 @@ const PROVIDERS: ProviderDef[] = [
   { id: "openrouter", label: "OpenRouter", model: "anthropic/claude-sonnet-4", provider: "openrouter" },
 ]
 
-/* ─── SVG logos (white, 20×20) ─── */
-function ClaudeLogo({ size = 20 }: { size?: number }) {
+/* ─── White SVG logos ─── */
+function ClaudeLogo() {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
       <path d="M16.009 8.06l-5.89 8.05h-2.31L13.699 8.06h2.31zm-8.018 8.05l5.89-8.05h2.31L10.301 16.11H7.991z" fill="currentColor" />
     </svg>
   )
 }
 
-function GeminiLogo({ size = 20 }: { size?: number }) {
+function GeminiLogo() {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <path d="M12 2C12 2 14.5 7.5 17.5 10.5C20.5 13.5 22 16 22 16C22 16 16.5 13.5 13.5 13.5C10.5 13.5 2 22 2 22C2 22 9.5 14.5 9.5 11.5C9.5 8.5 12 2 12 2Z" fill="currentColor" />
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+      <path d="M12 2a10.5 10.5 0 010 20 10.5 10.5 0 010-20z" fill="none" stroke="currentColor" strokeWidth="1.5"/>
+      <path d="M12 2c3 4 3 16 0 20M12 2c-3 4-3 16 0 20M2.5 9.5h19M2.5 14.5h19" stroke="currentColor" strokeWidth="1.2" fill="none"/>
     </svg>
   )
 }
 
-function OpenRouterLogo({ size = 20 }: { size?: number }) {
+function OpenRouterLogo() {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <path d="M12 3L3 8v8l9 5 9-5V8l-9-5zm0 2.18L18.36 8.5 12 11.82 5.64 8.5 12 5.18zM5 9.82l6 3.33v6.03l-6-3.33V9.82zm8 9.36v-6.03l6-3.33v6.03l-6 3.33z" fill="currentColor" />
+    <svg width="18" height="18" viewBox="0 0 512 512" fill="currentColor" stroke="currentColor">
+      <path d="M3 248.945C18 248.945 76 236 106 219C136 202 136 202 198 158C276.497 102.293 332 120.945 423 120.945" strokeWidth="50" fill="none"/>
+      <path d="M511 121.5L357.25 210.268L357.25 32.7324L511 121.5Z"/>
+      <path d="M0 249C15 249 73 261.945 103 278.945C133 295.945 133 295.945 195 339.945C273.497 395.652 329 377 420 377" strokeWidth="50" fill="none"/>
+      <path d="M508 376.445L354.25 287.678L354.25 465.213L508 376.445Z"/>
     </svg>
   )
 }
 
-const LOGO_MAP: Record<string, React.FC<{ size?: number }>> = {
+const LOGO_MAP: Record<string, React.FC> = {
   claude: ClaudeLogo,
   gemini: GeminiLogo,
   openrouter: OpenRouterLogo,
@@ -63,6 +67,8 @@ interface HomeViewProps {
   model: string
   provider: string
   setConfig: (key: string, value: unknown) => void
+  contextPressure: number
+  activities: ActivityEntry[]
 }
 
 /* ─── Helpers ─── */
@@ -75,11 +81,14 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)}d`
 }
 
-function getBarColor(pct: number): string {
-  if (pct >= 90) return "rgba(239,68,68,0.7)"
-  if (pct >= 70) return "rgba(245,158,11,0.6)"
-  return "rgba(255,255,255,0.3)"
+function barColor(pct: number): string {
+  if (pct >= 80) return "rgba(239,68,68,0.7)"
+  if (pct >= 50) return "rgba(245,158,11,0.6)"
+  return "rgba(52,199,89,0.5)"
 }
+
+const mono: React.CSSProperties = { fontFamily: "var(--font-geist-mono), monospace" }
+const dim = (a: number): string => `rgba(255,255,255,${a})`
 
 /* ─── Component ─── */
 export default function HomeView({
@@ -93,6 +102,8 @@ export default function HomeView({
   model,
   provider,
   setConfig,
+  contextPressure,
+  activities,
 }: HomeViewProps) {
   const { providers: usageProviders, isAvailable: usageAvailable } = useProviderUsage()
 
@@ -101,94 +112,107 @@ export default function HomeView({
     setConfig("model.provider", def.provider)
   }, [setConfig])
 
-  const isError = connectionState !== "connected"
-  const statusLabel = isError ? "Offline" : isProcessing ? "Processing" : "Watching"
-  const statusColor = isError ? "#EF4444" : isProcessing ? "#5BA4F6" : "rgba(255,255,255,0.25)"
+  const isOffline = connectionState !== "connected"
+  const statusDot = isOffline ? "#EF4444" : isProcessing ? "#5BA4F6" : "#34C759"
+  const statusText = isOffline ? "Offline" : isProcessing ? "Processing" : "Connected"
 
-  // Real recent sessions (exclude home, limit to 5)
-  const recentSessions = React.useMemo(() => {
-    return sessionsList
+  const recentSessions = React.useMemo(() =>
+    sessionsList
       .filter(s => s.id !== "home" && s.preview)
       .sort((a, b) => b.last_active - a.last_active)
-      .slice(0, 5)
-  }, [sessionsList])
+      .slice(0, 4),
+    [sessionsList]
+  )
+
+  // Recent tool activity (last 6 completed/running)
+  const recentActivity = React.useMemo(() =>
+    activities
+      .filter(a => a.kind !== "status")
+      .slice(-6)
+      .reverse(),
+    [activities]
+  )
+
+  const activeModel = model.split("/").pop() || model
 
   return (
     <div className="home-enter" style={{
-      display: "flex",
-      flexDirection: "column",
-      flex: 1,
-      minHeight: 0,
-      position: "relative",
+      display: "flex", flexDirection: "column", flex: 1,
+      minHeight: 0, position: "relative",
     }}>
-      {/* ─── Background glow ─── */}
+      {/* Glow */}
       <div style={{
-        position: "absolute",
-        top: "5%",
-        left: "50%",
-        transform: "translateX(-50%)",
-        width: "90%",
-        height: "50%",
+        position: "absolute", top: "5%", left: "50%",
+        transform: "translateX(-50%)", width: "90%", height: "50%",
         background: isProcessing
           ? "radial-gradient(ellipse, rgba(91,164,246,0.06) 0%, transparent 70%)"
           : "radial-gradient(ellipse, rgba(255,255,255,0.03) 0%, transparent 70%)",
-        pointerEvents: "none",
-        transition: "background 1s ease",
+        pointerEvents: "none", transition: "background 1s ease",
       }} />
 
       <div style={{
-        display: "flex",
-        flexDirection: "column",
-        flex: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        padding: isMobile ? "12px 20px" : "24px 32px",
-        gap: isMobile ? 20 : 28,
-        position: "relative",
-        maxWidth: 480,
-        margin: "0 auto",
-        width: "100%",
+        display: "flex", flexDirection: "column", flex: 1,
+        alignItems: "center", justifyContent: "center",
+        padding: isMobile ? "12px 16px" : "20px 32px",
+        gap: isMobile ? 16 : 20,
+        position: "relative", maxWidth: 500, margin: "0 auto", width: "100%",
       }}>
 
-        {/* ─── Eye ─── */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: isMobile ? 6 : 10 }}>
+        {/* ═══ Eye + Status ═══ */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
           <IrisEyeTracking
-            size={isMobile ? 100 : 160}
-            status={isError ? "error" : isProcessing ? "processing" : "idle"}
+            size={isMobile ? 80 : 120}
+            status={isOffline ? "error" : isProcessing ? "processing" : "idle"}
             connectionState={connectionState}
           />
-          <span style={{
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: "0.12em",
-            textTransform: "uppercase" as const,
-            color: statusColor,
-            transition: "color 400ms ease",
-          }}>
-            {statusLabel}
-          </span>
+          {/* Status block */}
+          <div style={{ textAlign: "center", display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase" as const, color: dim(0.25) }}>
+              {agentName}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
+              <span style={{
+                width: 5, height: 5, borderRadius: "50%", background: statusDot,
+                boxShadow: !isOffline ? `0 0 6px ${statusDot}` : "none",
+                animation: isProcessing ? "preparing-spin 2s linear infinite" : undefined,
+              }} />
+              <span style={{ fontSize: 10, color: dim(0.45), fontWeight: 500 }}>{statusText}</span>
+              <span style={{ fontSize: 9, color: dim(0.15) }}>·</span>
+              <span style={{ fontSize: 9, color: dim(0.25), ...mono }}>{activeModel}</span>
+            </div>
+            {/* Context pressure */}
+            {contextPressure > 0 && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 2 }}>
+                <span style={{ fontSize: 8, color: dim(0.15), textTransform: "uppercase" as const, letterSpacing: "0.06em" }}>ctx</span>
+                <div style={{ width: 60, height: 2, borderRadius: 1, background: dim(0.04), overflow: "hidden" }}>
+                  <div style={{
+                    width: `${contextPressure}%`, height: "100%", borderRadius: 1,
+                    background: contextPressure > 80 ? "rgba(239,68,68,0.5)" : dim(0.15),
+                  }} />
+                </div>
+                <span style={{ fontSize: 8, color: dim(0.12), ...mono }}>{contextPressure}%</span>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* ─── Provider selector with usage bars ─── */}
+        {/* ═══ Provider Cards ═══ */}
         <div style={{
-          display: "flex",
-          gap: isMobile ? 20 : 32,
-          justifyContent: "center",
+          display: "flex", gap: 8, width: "100%",
         }}>
           {PROVIDERS.map(def => {
             const isActive = provider === def.provider
               && model.includes(def.model.split("/").pop() || def.model)
             const Logo = LOGO_MAP[def.id]
 
-            // Get usage bar for this provider
             const usage = usageAvailable
               ? usageProviders.find(u => u.providerId === def.usageId)
               : undefined
-            const mainProgress = usage?.lines.find(
+            const progressLines = usage?.lines.filter(
               (l): l is UsageLineProgress => l.type === "progress"
-            )
-            const pct = mainProgress && mainProgress.limit > 0
-              ? Math.min((mainProgress.used / mainProgress.limit) * 100, 100)
+            ) || []
+            const mainPct = progressLines.length > 0 && progressLines[0].limit > 0
+              ? Math.min((progressLines[0].used / progressLines[0].limit) * 100, 100)
               : null
 
             return (
@@ -196,170 +220,194 @@ export default function HomeView({
                 key={def.id}
                 onClick={() => { if (!isActive) switchProvider(def) }}
                 style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 6,
-                  background: "none",
-                  border: "none",
+                  flex: 1, display: "flex", flexDirection: "column",
+                  padding: "10px 10px 0 10px", borderRadius: 8,
+                  background: isActive ? dim(0.04) : dim(0.015),
+                  border: `1px solid ${isActive ? dim(0.08) : dim(0.03)}`,
                   cursor: isActive ? "default" : "pointer",
-                  padding: "4px 0",
-                  minWidth: 56,
+                  transition: "all 150ms ease",
+                  overflow: "hidden",
+                }}
+                onMouseEnter={e => {
+                  if (!isActive) {
+                    e.currentTarget.style.borderColor = dim(0.08)
+                    e.currentTarget.style.background = dim(0.03)
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!isActive) {
+                    e.currentTarget.style.borderColor = dim(0.03)
+                    e.currentTarget.style.background = dim(0.015)
+                  }
                 }}
               >
-                {/* Logo */}
-                <div style={{
-                  color: isActive ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.2)",
-                  transition: "color 200ms ease",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 32,
-                  height: 32,
-                }}>
-                  {Logo && <Logo size={22} />}
+                {/* Header */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <span style={{ color: isActive ? dim(0.7) : dim(0.2), display: "flex" }}>
+                    {Logo && <Logo />}
+                  </span>
+                  <span style={{
+                    fontSize: 11, fontWeight: isActive ? 600 : 400,
+                    color: isActive ? dim(0.7) : dim(0.3),
+                  }}>
+                    {def.label}
+                  </span>
+                  {isActive && (
+                    <span style={{
+                      width: 4, height: 4, borderRadius: "50%",
+                      background: "#34C759", marginLeft: "auto",
+                      boxShadow: "0 0 4px rgba(52,199,89,0.5)",
+                    }} />
+                  )}
                 </div>
 
-                {/* Label */}
-                <span style={{
-                  fontSize: 9,
-                  fontWeight: isActive ? 600 : 400,
-                  letterSpacing: "0.04em",
-                  color: isActive ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.18)",
-                  transition: "color 200ms ease",
-                  textTransform: "uppercase" as const,
-                }}>
-                  {def.label}
-                </span>
+                {/* Stats */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 8 }}>
+                  {mainPct !== null ? (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 9, color: dim(0.2) }}>Usage</span>
+                        <span style={{ fontSize: 9, color: dim(0.35), ...mono }}>{Math.round(mainPct)}%</span>
+                      </div>
+                      {progressLines.length > 1 && (
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: 9, color: dim(0.2) }}>{progressLines[1].label}</span>
+                          <span style={{ fontSize: 9, color: dim(0.25), ...mono }}>
+                            {Math.round(Math.min((progressLines[1].used / progressLines[1].limit) * 100, 100))}%
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 9, color: dim(0.15) }}>Usage</span>
+                      <span style={{ fontSize: 9, color: dim(0.1), ...mono }}>—</span>
+                    </div>
+                  )}
+                </div>
 
-                {/* Usage bar */}
+                {/* Bottom bar */}
                 <div style={{
-                  width: 48,
-                  height: 2,
-                  borderRadius: 1,
-                  background: "rgba(255,255,255,0.04)",
-                  overflow: "hidden",
+                  height: 2, borderRadius: "0 0 7px 7px",
+                  margin: "0 -10px",
+                  background: dim(0.03),
                 }}>
-                  {pct !== null ? (
+                  {mainPct !== null && (
                     <div style={{
-                      width: `${pct}%`,
-                      height: "100%",
-                      borderRadius: 1,
-                      background: isActive ? getBarColor(pct) : "rgba(255,255,255,0.1)",
+                      width: `${mainPct}%`, height: "100%",
+                      background: barColor(mainPct),
                       transition: "width 600ms ease",
                     }} />
-                  ) : isActive ? (
-                    <div style={{
-                      width: "100%",
-                      height: "100%",
-                      borderRadius: 1,
-                      background: "rgba(255,255,255,0.12)",
-                    }} />
-                  ) : null}
+                  )}
                 </div>
               </button>
             )
           })}
         </div>
 
-        {/* ─── Command bar ─── */}
+        {/* ═══ Input ═══ */}
         <button
           onClick={onNewSession}
           style={{
-            width: "100%",
-            maxWidth: 380,
-            padding: "10px 16px",
-            borderRadius: 10,
-            border: "1px solid rgba(255,255,255,0.06)",
-            background: "rgba(255,255,255,0.02)",
-            color: "rgba(255,255,255,0.2)",
-            fontSize: 13,
-            textAlign: "left" as const,
-            cursor: "pointer",
-            transition: "border-color 150ms ease, background 150ms ease",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
+            width: "100%", padding: "9px 14px", borderRadius: 8,
+            border: `1px solid ${dim(0.04)}`, background: dim(0.015),
+            color: dim(0.18), fontSize: 12, textAlign: "left" as const,
+            cursor: "pointer", transition: "border-color 150ms ease",
+            display: "flex", alignItems: "center", gap: 8,
           }}
-          onMouseEnter={e => {
-            e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"
-            e.currentTarget.style.background = "rgba(255,255,255,0.03)"
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.borderColor = "rgba(255,255,255,0.06)"
-            e.currentTarget.style.background = "rgba(255,255,255,0.02)"
-          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = dim(0.1) }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = dim(0.04) }}
         >
-          <span style={{ opacity: 0.3, fontSize: 14 }}>→</span>
-          Ask {agentName} anything...
+          <span style={{ opacity: 0.3, fontSize: 12 }}>→</span>
+          <span>Ask {agentName} anything...</span>
         </button>
 
-        {/* ─── Recent activity (real sessions) ─── */}
-        {recentSessions.length > 0 && (
-          <div style={{ width: "100%", maxWidth: 380 }}>
-            <div style={{
-              fontSize: 9,
-              fontWeight: 600,
-              textTransform: "uppercase" as const,
-              letterSpacing: "0.08em",
-              color: "rgba(255,255,255,0.12)",
-              marginBottom: 6,
-            }}>
-              Recent
-            </div>
+        {/* ═══ Activity Feed ═══ */}
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{
+            fontSize: 9, fontWeight: 600, textTransform: "uppercase" as const,
+            letterSpacing: "0.08em", color: dim(0.12),
+          }}>
+            Activity
+          </div>
 
+          {/* Tool activity from current session */}
+          {recentActivity.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {recentActivity.map(a => (
+                <div key={a.id} style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  padding: "4px 6px", borderRadius: 4,
+                }}>
+                  <span style={{
+                    width: 5, height: 5, borderRadius: "50%", flexShrink: 0,
+                    background: a.status === "running" ? dim(0.4)
+                      : a.status === "error" ? "rgba(239,68,68,0.4)"
+                      : dim(0.08),
+                    animation: a.status === "running" ? "preparing-spin 1.5s linear infinite" : undefined,
+                  }} />
+                  <span style={{
+                    fontSize: 11, color: a.status === "running" ? dim(0.5) : dim(0.3),
+                    flex: 1, overflow: "hidden", textOverflow: "ellipsis",
+                    whiteSpace: "nowrap" as const,
+                    fontWeight: a.status === "running" ? 500 : 400,
+                  }}>
+                    {a.title}
+                  </span>
+                  <span style={{ fontSize: 9, color: dim(0.08), ...mono, flexShrink: 0 }}>
+                    {a.timestamp}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Recent sessions */}
+          {recentSessions.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 1, marginTop: recentActivity.length > 0 ? 4 : 0 }}>
+              {recentActivity.length > 0 && (
+                <div style={{
+                  fontSize: 9, fontWeight: 600, textTransform: "uppercase" as const,
+                  letterSpacing: "0.08em", color: dim(0.1), marginBottom: 2,
+                }}>
+                  Sessions
+                </div>
+              )}
               {recentSessions.map(s => (
                 <button
                   key={s.id}
                   onClick={() => resumeSession(s.id)}
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "6px 8px",
-                    borderRadius: 6,
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    textAlign: "left" as const,
-                    width: "100%",
-                    transition: "background 100ms ease",
+                    display: "flex", alignItems: "center", gap: 8,
+                    padding: "4px 6px", borderRadius: 4, background: "transparent",
+                    border: "none", cursor: "pointer", textAlign: "left" as const,
+                    width: "100%", transition: "background 100ms ease",
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)" }}
+                  onMouseEnter={e => { e.currentTarget.style.background = dim(0.02) }}
                   onMouseLeave={e => { e.currentTarget.style.background = "transparent" }}
                 >
-                  {/* Dot */}
+                  <span style={{ width: 4, height: 4, borderRadius: "50%", background: dim(0.08), flexShrink: 0 }} />
                   <span style={{
-                    width: 4, height: 4, borderRadius: "50%",
-                    background: "rgba(255,255,255,0.12)", flexShrink: 0,
-                  }} />
-                  {/* Title/preview */}
-                  <span style={{
-                    fontSize: 12,
-                    color: "rgba(255,255,255,0.4)",
-                    fontWeight: 400,
-                    flex: 1,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap" as const,
+                    fontSize: 11, color: dim(0.3), flex: 1,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const,
                   }}>
                     {s.title || s.preview}
                   </span>
-                  {/* Time */}
-                  <span style={{
-                    fontSize: 10,
-                    color: "rgba(255,255,255,0.1)",
-                    fontFamily: "var(--font-geist-mono), monospace",
-                    flexShrink: 0,
-                  }}>
+                  <span style={{ fontSize: 9, color: dim(0.08), ...mono, flexShrink: 0 }}>
                     {relativeTime(s.last_active)}
                   </span>
                 </button>
               ))}
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Empty state */}
+          {recentActivity.length === 0 && recentSessions.length === 0 && (
+            <div style={{ padding: "12px 0", textAlign: "center" as const }}>
+              <span style={{ fontSize: 11, color: dim(0.1) }}>No activity yet</span>
+            </div>
+          )}
+        </div>
 
       </div>
     </div>

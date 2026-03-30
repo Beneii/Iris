@@ -39,3 +39,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# electron build output
+/dist/
+
+# python cache
+__pycache__/
+*.pyc
+
+# sqlite
+*.db
+
+# electron debug
+electron-debug.log

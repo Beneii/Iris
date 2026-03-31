@@ -176,7 +176,7 @@ export default function SessionSidebar({
                   fontWeight: isUnread ? 600 : 500,
                   color: isActive ? "rgba(255,255,255,0.85)" : isUnread ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.5)",
                 }}>
-                  home
+                  general
                 </span>
                 {isUnread && (
                   <span style={{
@@ -209,8 +209,10 @@ export default function SessionSidebar({
             const label = s.title || (s.preview ? s.preview.slice(0, 30) : "Untitled")
 
             return (
-              <button
+              <div
                 key={s.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => {
                   if (!isActive) {
                     hapticLight()
@@ -312,7 +314,7 @@ export default function SessionSidebar({
                 >
                   <X size={12} strokeWidth={2} />
                 </button>
-              </button>
+              </div>
             )
           })}
         </div>

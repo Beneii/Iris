@@ -244,10 +244,8 @@ export default function HomePage() {
     : ""
 
   // Derive session title from first user message
-  const isHome = activeSessionId === HOME_SESSION_ID
-
   const sessionTitle = React.useMemo(() => {
-    if (activeSessionId === HOME_SESSION_ID) return "Home"
+    if (activeSessionId === HOME_SESSION_ID) return "#general"
     const firstUser = messages.find((m) => m.role === "user")
     if (!firstUser) return "New conversation"
     const text = firstUser.content

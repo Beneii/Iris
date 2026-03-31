@@ -128,7 +128,7 @@ export default function PantheonPanel({
           letterSpacing: "0.08em",
           color: "rgba(255,255,255,0.25)",
         }}>
-          Pantheon
+          Agents
         </span>
       </div>
 

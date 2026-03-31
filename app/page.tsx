@@ -9,7 +9,7 @@ import Composer from "@/components/chat/composer"
 import { CommandPalette, type Command } from "@/components/command-palette"
 import SessionSidebar from "@/components/sidebar/session-list"
 import SettingsModal from "@/components/panels/settings-panel"
-import HomeView from "@/components/home/home-view"
+import PantheonPanel from "@/components/panels/pantheon-panel"
 import { hapticLight, hapticMedium, hapticSuccess, hapticError } from "@/lib/haptics"
 import { useKeyboardLayout } from "@/hooks/use-keyboard-layout"
 
@@ -75,6 +75,7 @@ export default function HomePage() {
   const [composerValue, setComposerValue] = React.useState("")
   const [sidebarVisible, setSidebarVisible] = React.useState(true)
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
+  const [pantheonVisible, setPantheonVisible] = React.useState(true)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [settingsTab, setSettingsTab] = React.useState<string>("settings")
   const [showCommandPalette, setShowCommandPalette] = React.useState(false)
@@ -242,16 +243,16 @@ export default function HomePage() {
     ? composerValue.slice(1)
     : ""
 
+  // Derive session title from first user message
   const isHome = activeSessionId === HOME_SESSION_ID
 
-  // Derive session title from first user message
   const sessionTitle = React.useMemo(() => {
-    if (isHome) return "Home"
+    if (activeSessionId === HOME_SESSION_ID) return "Home"
     const firstUser = messages.find((m) => m.role === "user")
     if (!firstUser) return "New conversation"
     const text = firstUser.content
     return text.length > 35 ? text.slice(0, 35) + "..." : text
-  }, [messages, isHome])
+  }, [messages, activeSessionId])
 
   return (
     <div className="flex h-dvh" style={{
@@ -446,25 +447,9 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* ─── Home Dashboard vs Regular Chat ─── */}
-        {isHome ? (
-          <HomeView
-            connectionState={connectionState}
-            isProcessing={isProcessing}
-            sessionsList={sessionsList}
-            agentName={agentName}
-            isMobile={isMobile}
-            resumeSession={resumeSession}
-            onNewSession={() => { hapticLight(); newSession() }}
-            model={model}
-            provider={provider}
-            setConfig={setConfig}
-            contextPressure={contextPressure}
-            activities={activities}
-          />
-        ) : (
-          <>
-            {/* Messages */}
+        {/* ─── Chat ─── */}
+        <>
+          {/* Messages */}
             <div ref={scrollRef} onScroll={handleScroll}
               onTouchStart={(e) => { (scrollRef.current as any).__touchStartY = e.touches[0].clientY }}
               onTouchEnd={(e) => {
@@ -578,9 +563,20 @@ export default function HomePage() {
                 />
               </div>
             </div>
-          </>
-        )}
+        </>
       </main>
+
+      {/* ─── Right Panel: Pantheon ─── */}
+      {!isMobile && pantheonVisible && (
+        <div style={{
+          width: 220,
+          flexShrink: 0,
+          height: "100%",
+          overflow: "hidden",
+        }}>
+          <PantheonPanel isProcessing={isProcessing} />
+        </div>
+      )}
 
       {/* ─── Settings Modal ─── */}
       <SettingsModal

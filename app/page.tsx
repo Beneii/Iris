@@ -86,6 +86,32 @@ export default function HomePage() {
   const isCompact = useMediaQuery("(max-width: 1023px)")
   useKeyboardLayout()
 
+  // ─── Mobile swipe gestures: right→open sidebar, left→open agents ───
+  const swipeRef = React.useRef<{ startX: number; startY: number } | null>(null)
+  const [agentPanelOpen, setAgentPanelOpen] = React.useState(false)
+
+  const handleSwipeStart = React.useCallback((e: React.TouchEvent) => {
+    swipeRef.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY }
+  }, [])
+
+  const handleSwipeEnd = React.useCallback((e: React.TouchEvent) => {
+    if (!swipeRef.current || !isMobile) return
+    const dx = e.changedTouches[0].clientX - swipeRef.current.startX
+    const dy = Math.abs(e.changedTouches[0].clientY - swipeRef.current.startY)
+    swipeRef.current = null
+    if (dy > 80 || Math.abs(dx) < 60) return // too vertical or too short
+
+    if (dx > 0) {
+      // Swipe right
+      if (agentPanelOpen) setAgentPanelOpen(false)
+      else setSidebarOpen(true)
+    } else {
+      // Swipe left
+      if (sidebarOpen) setSidebarOpen(false)
+      else setAgentPanelOpen(true)
+    }
+  }, [isMobile, sidebarOpen, agentPanelOpen])
+
   // Auto-scroll only if user is near the bottom (within 150px)
   const isNearBottomRef = React.useRef(true)
   const [showScrollDown, setShowScrollDown] = React.useState(false)
@@ -294,7 +320,12 @@ export default function HomePage() {
       </div>
 
       {/* ─── Main Area ─── */}
-      <main className="flex flex-col flex-1 min-w-0" style={{ background: "var(--color-canvas)" }}>
+      <main
+        className="flex flex-col flex-1 min-w-0"
+        style={{ background: "var(--color-canvas)" }}
+        onTouchStart={handleSwipeStart}
+        onTouchEnd={handleSwipeEnd}
+      >
         {/* Header */}
         <header
           className="flex flex-col flex-shrink-0"
@@ -305,21 +336,8 @@ export default function HomePage() {
             WebkitAppRegion: "drag",
           }}
         >
-          {/* Progress bar — sits below the safe area, above header content */}
-          <div style={{
-            height: 2,
-            width: "100%",
-            overflow: "hidden",
-            opacity: isProcessing ? 1 : 0,
-            transition: "opacity 300ms ease",
-          }}>
-            <div style={{
-              height: "100%",
-              background: "linear-gradient(90deg, rgba(255,255,255,0.4), rgba(255,255,255,0.15), rgba(255,255,255,0.4))",
-              backgroundSize: "200% 100%",
-              animation: isProcessing ? "iris-progress 1.5s linear infinite" : "none",
-            }} />
-          </div>
+          {/* 2px spacer to align with sidebar/agents headers */}
+          <div style={{ height: 2 }} />
           {/* Header content row */}
           <div className="flex items-center px-6" style={{ height: 52, gap: 12 }}>
           {/* Left: panel toggle + agent name */}
@@ -564,7 +582,8 @@ export default function HomePage() {
         </>
       </main>
 
-      {/* ─── Right Panel: Pantheon ─── */}
+      {/* ─── Right Panel: Agents ─── */}
+      {/* Desktop: inline panel */}
       {!isMobile && pantheonVisible && (
         <div style={{
           width: 220,
@@ -574,6 +593,38 @@ export default function HomePage() {
         }}>
           <PantheonPanel isProcessing={isProcessing} />
         </div>
+      )}
+      {/* Mobile: slide-in from right */}
+      {isMobile && (
+        <>
+          <div
+            onClick={() => setAgentPanelOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.6)",
+              zIndex: 40,
+              opacity: agentPanelOpen ? 1 : 0,
+              pointerEvents: agentPanelOpen ? "auto" : "none",
+              transition: "opacity 300ms cubic-bezier(0.32, 0.72, 0, 1)",
+            }}
+          />
+          <aside
+            style={{
+              position: "fixed",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: 260,
+              zIndex: 50,
+              transform: agentPanelOpen ? "translateX(0)" : "translateX(100%)",
+              transition: "transform 300ms cubic-bezier(0.32, 0.72, 0, 1)",
+              paddingBottom: "env(safe-area-inset-bottom)",
+            }}
+          >
+            <PantheonPanel isProcessing={isProcessing} />
+          </aside>
+        </>
       )}
 
       {/* ─── Settings Modal ─── */}

@@ -117,21 +117,16 @@ export default function PantheonPanel({
       background: "var(--color-surface)",
       borderLeft: "1px solid var(--color-border-dim)",
     }}>
-      {/* Header — matches main header: env(safe-area-inset-top) + 2px progress + 52px row */}
-      <div style={{
-        paddingTop: "env(safe-area-inset-top)",
-        borderBottom: "1px solid var(--color-border-dim)",
-        flexShrink: 0,
-      }}>
-        {/* Spacer matching progress bar height */}
+      {/* Header — matches main header exactly */}
+      <header
+        className="flex flex-col flex-shrink-0"
+        style={{
+          paddingTop: "env(safe-area-inset-top)",
+          borderBottom: "1px solid var(--color-border-dim)",
+        }}
+      >
         <div style={{ height: 2 }} />
-        {/* Content row matching main header 52px */}
-        <div style={{
-          height: 52,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 16px",
-        }}>
+        <div className="flex items-center px-4" style={{ height: 52 }}>
           <span style={{
             fontSize: 10,
             fontWeight: 600,
@@ -142,7 +137,7 @@ export default function PantheonPanel({
             Agents
           </span>
         </div>
-      </div>
+      </header>
 
       {/* Content */}
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>

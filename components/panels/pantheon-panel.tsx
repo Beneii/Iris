@@ -11,15 +11,16 @@ export type PantheonAgent = {
   role: string
   model: string
   status: AgentStatus
-  icon: string         // unicode symbol
+  icon: string
+  color: string        // pastel accent color
   description: string
-  memorySize?: number  // entries
+  memorySize?: number
   skillCount?: number
-  lastActive?: number  // unix timestamp
+  lastActive?: number
   currentTask?: string
 }
 
-/* ─── Default Pantheon ─── */
+/* ─── Default Agents ─── */
 export const DEFAULT_AGENTS: PantheonAgent[] = [
   {
     id: "hermes",
@@ -28,6 +29,7 @@ export const DEFAULT_AGENTS: PantheonAgent[] = [
     model: "claude-opus-4",
     status: "running",
     icon: "☤",
+    color: "#B8C7E0",     // cool silver-blue
     description: "Primary agent. Routes tasks, manages memory, coordinates the pantheon.",
     memorySize: 42,
     skillCount: 108,
@@ -39,6 +41,7 @@ export const DEFAULT_AGENTS: PantheonAgent[] = [
     model: "claude-code",
     status: "idle",
     icon: "⚙",
+    color: "#E0C4A8",     // warm bronze
     description: "Pure code execution. Writes, refactors, debugs. No opinions, just builds.",
     skillCount: 12,
   },
@@ -49,6 +52,7 @@ export const DEFAULT_AGENTS: PantheonAgent[] = [
     model: "local · llama",
     status: "idle",
     icon: "△",
+    color: "#F2D48A",     // golden amber
     description: "Fast and risky. Prototyping, creative drafts, things that might fail.",
   },
   {
@@ -58,6 +62,7 @@ export const DEFAULT_AGENTS: PantheonAgent[] = [
     model: "deepseek-r1",
     status: "idle",
     icon: "◈",
+    color: "#A8D8C8",     // sage green
     description: "Ferries data from the other side. Web research, API calls, document processing.",
     skillCount: 8,
   },
@@ -68,6 +73,7 @@ export const DEFAULT_AGENTS: PantheonAgent[] = [
     model: "local · qwen",
     status: "idle",
     icon: "◑",
+    color: "#C4B0D8",     // soft lavender
     description: "Background operations. Self-improvement, memory decay, monitoring, cron.",
   },
 ]
@@ -84,9 +90,9 @@ interface PantheonPanelProps {
 /* ─── Status styling ─── */
 const STATUS_DOT: Record<AgentStatus, { color: string; className: string }> = {
   running: { color: "#34C759", className: "dot-running" },
-  idle: { color: "rgba(255,255,255,0.2)", className: "" },
+  idle: { color: "rgba(255,255,255,0.15)", className: "" },
   error: { color: "#EF4444", className: "dot-error" },
-  offline: { color: "rgba(255,255,255,0.08)", className: "" },
+  offline: { color: "rgba(255,255,255,0.06)", className: "" },
 }
 
 /* ─── Component ─── */
@@ -99,7 +105,6 @@ export default function PantheonPanel({
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const selected = agents.find(a => a.id === selectedId)
 
-  // When Hermes is processing, reflect that
   const liveAgents = React.useMemo(() => {
     return agents.map(a => a.id === "hermes" && isProcessing ? { ...a, status: "running" as AgentStatus } : a)
   }, [agents, isProcessing])
@@ -112,32 +117,38 @@ export default function PantheonPanel({
       background: "var(--color-surface)",
       borderLeft: "1px solid var(--color-border-dim)",
     }}>
-      {/* Header */}
+      {/* Header — matches main header: env(safe-area-inset-top) + 2px progress + 52px row */}
       <div style={{
-        padding: "0 16px",
-        height: 52,
-        display: "flex",
-        alignItems: "center",
+        paddingTop: "env(safe-area-inset-top)",
         borderBottom: "1px solid var(--color-border-dim)",
         flexShrink: 0,
       }}>
-        <span style={{
-          fontSize: 10,
-          fontWeight: 600,
-          textTransform: "uppercase" as const,
-          letterSpacing: "0.08em",
-          color: "rgba(255,255,255,0.25)",
+        {/* Spacer matching progress bar height */}
+        <div style={{ height: 2 }} />
+        {/* Content row matching main header 52px */}
+        <div style={{
+          height: 52,
+          display: "flex",
+          alignItems: "center",
+          padding: "0 16px",
         }}>
-          Agents
-        </span>
+          <span style={{
+            fontSize: 10,
+            fontWeight: 600,
+            textTransform: "uppercase" as const,
+            letterSpacing: "0.08em",
+            color: "rgba(255,255,255,0.25)",
+          }}>
+            Agents
+          </span>
+        </div>
       </div>
 
-      {/* Agent list or detail view */}
+      {/* Content */}
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         {selected ? (
           /* ─── Detail View ─── */
           <div style={{ flex: 1, overflow: "auto", padding: "16px" }}>
-            {/* Back */}
             <button
               onClick={() => setSelectedId(null)}
               style={{
@@ -147,7 +158,7 @@ export default function PantheonPanel({
                 color: "rgba(255,255,255,0.3)",
                 fontSize: 12,
                 padding: "4px 0",
-                marginBottom: 16,
+                marginBottom: 20,
                 display: "flex",
                 alignItems: "center",
                 gap: 4,
@@ -158,21 +169,11 @@ export default function PantheonPanel({
 
             {/* Agent header */}
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-              <div style={{
-                width: 40,
-                height: 40,
-                borderRadius: 10,
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.06)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 18,
-              }}>
+              <span style={{ fontSize: 28, color: selected.color, lineHeight: 1 }}>
                 {selected.icon}
-              </div>
+              </span>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: selected.color }}>
                   {selected.name}
                 </div>
                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>
@@ -181,18 +182,17 @@ export default function PantheonPanel({
               </div>
             </div>
 
-            {/* Description */}
             <div style={{
               fontSize: 12,
-              color: "rgba(255,255,255,0.4)",
+              color: "rgba(255,255,255,0.35)",
               lineHeight: 1.5,
-              marginBottom: 20,
+              marginBottom: 24,
             }}>
               {selected.description}
             </div>
 
             {/* Meta */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 28 }}>
               {[
                 { label: "Model", value: selected.model },
                 { label: "Status", value: selected.status },
@@ -200,10 +200,10 @@ export default function PantheonPanel({
                 ...(selected.skillCount ? [{ label: "Skills", value: `${selected.skillCount}` }] : []),
               ].map(row => (
                 <div key={row.label} style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)" }}>{row.label}</span>
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.18)" }}>{row.label}</span>
                   <span style={{
                     fontSize: 11,
-                    color: "rgba(255,255,255,0.5)",
+                    color: "rgba(255,255,255,0.45)",
                     fontFamily: "var(--font-geist-mono), monospace",
                   }}>
                     {row.value}
@@ -220,21 +220,22 @@ export default function PantheonPanel({
                   width: "100%",
                   padding: "8px 0",
                   borderRadius: 8,
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  background: "rgba(255,255,255,0.03)",
-                  color: "rgba(255,255,255,0.5)",
+                  border: `1px solid ${selected.color}22`,
+                  background: `${selected.color}08`,
+                  color: selected.color,
                   fontSize: 12,
                   fontWeight: 500,
                   cursor: "pointer",
                   transition: "background 150ms ease, border-color 150ms ease",
+                  opacity: 0.7,
                 }}
                 onMouseEnter={e => {
-                  e.currentTarget.style.background = "rgba(255,255,255,0.06)"
-                  e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"
+                  e.currentTarget.style.opacity = "1"
+                  e.currentTarget.style.background = `${selected.color}12`
                 }}
                 onMouseLeave={e => {
-                  e.currentTarget.style.background = "rgba(255,255,255,0.03)"
-                  e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"
+                  e.currentTarget.style.opacity = "0.7"
+                  e.currentTarget.style.background = `${selected.color}08`
                 }}
               >
                 Message {selected.name}
@@ -243,7 +244,7 @@ export default function PantheonPanel({
           </div>
         ) : (
           /* ─── Agent List ─── */
-          <div style={{ flex: 1, overflow: "auto", padding: "8px" }}>
+          <div style={{ flex: 1, overflow: "auto", padding: "8px 8px" }}>
             {liveAgents.map(agent => {
               const dot = STATUS_DOT[agent.status]
               return (
@@ -259,7 +260,7 @@ export default function PantheonPanel({
                     alignItems: "center",
                     gap: 10,
                     width: "100%",
-                    padding: "8px 10px",
+                    padding: "10px 8px",
                     borderRadius: 8,
                     background: "transparent",
                     border: "none",
@@ -269,38 +270,34 @@ export default function PantheonPanel({
                   onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.03)" }}
                   onMouseLeave={e => { e.currentTarget.style.background = "transparent" }}
                 >
-                  {/* Icon */}
-                  <div style={{
-                    width: 30,
-                    height: 30,
-                    borderRadius: 8,
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.05)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 14,
+                  {/* Icon — no box, just the symbol */}
+                  <span style={{
+                    fontSize: 20,
+                    color: agent.color,
+                    width: 24,
+                    textAlign: "center" as const,
                     flexShrink: 0,
+                    lineHeight: 1,
                   }}>
                     {agent.icon}
-                  </div>
+                  </span>
 
                   {/* Name + role */}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{
                       fontSize: 13,
                       fontWeight: 500,
-                      color: "rgba(255,255,255,0.7)",
+                      color: agent.color,
                       lineHeight: 1.3,
                     }}>
                       {agent.name}
                     </div>
                     <div style={{
                       fontSize: 10,
-                      color: "rgba(255,255,255,0.2)",
+                      color: "rgba(255,255,255,0.18)",
                       lineHeight: 1.3,
                     }}>
-                      {agent.role} · {agent.model}
+                      {agent.model}
                     </div>
                   </div>
 
@@ -308,8 +305,8 @@ export default function PantheonPanel({
                   <span
                     className={dot.className}
                     style={{
-                      width: 6,
-                      height: 6,
+                      width: 5,
+                      height: 5,
                       borderRadius: "50%",
                       background: dot.color,
                       flexShrink: 0,

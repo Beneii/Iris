@@ -117,16 +117,20 @@ export default function PantheonPanel({
       background: "var(--color-surface)",
       borderLeft: "1px solid var(--color-border-dim)",
     }}>
-      {/* Header — matches main header exactly */}
+      {/* Header — mirrors main <header> exactly so borders align */}
       <header
         className="flex flex-col flex-shrink-0"
         style={{
           paddingTop: "env(safe-area-inset-top)",
           borderBottom: "1px solid var(--color-border-dim)",
+          // @ts-expect-error WebkitAppRegion is non-standard
+          WebkitAppRegion: "drag",
         }}
       >
+        {/* Match the 2px progress bar spacer */}
         <div style={{ height: 2 }} />
-        <div className="flex items-center px-4" style={{ height: 52 }}>
+        {/* Match the 52px content row */}
+        <div className="flex items-center" style={{ height: 52, padding: "0 16px" }}>
           <span style={{
             fontSize: 10,
             fontWeight: 600,

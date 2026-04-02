@@ -19,6 +19,8 @@ import json
 import mimetypes
 import os
 import re
+import socket
+import socketserver
 import sys
 import time
 import threading
@@ -37,7 +39,8 @@ from starlette.websockets import WebSocketState
 HERMES_DIR = Path("/tmp/hermes-agent")
 sys.path.insert(0, str(HERMES_DIR))
 
-from hermes_adapter import HermesAdapter, get_config, get_agent_name, get_soul_content, get_memory, list_skills, get_available_toolsets, set_config_value, list_jobs, create_job, pause_job, resume_job, trigger_job, remove_job, get_job_outputs
+from hermes_adapter import HermesAdapter, get_config, get_agent_name, get_soul_content, get_memory, list_skills, get_available_toolsets, set_config_value, list_jobs, create_job, pause_job, resume_job, trigger_job, remove_job, get_job_outputs, resolve_profile_for_session
+from profile_runtime import get_runtime_manager, PROFILE_NAMES
 from permissions import load_permissions, save_permissions
 
 # Session persistence via Hermes state.db (stable SQLite API)
@@ -66,6 +69,7 @@ running_threads: dict[str, threading.Thread] = {}
 cancel_flags: dict[str, bool] = {}
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _start_time = time.time()
+_RESTART_SOCKET_PATH = "/tmp/iris-profile-restart.sock"
 
 # ─── Activity persistence ───
 ACTIVITY_DIR = hermes_home / "iris_activity"
@@ -127,7 +131,132 @@ def _process_media_refs(text: str, session_id: str = "") -> str:
 NOTIFICATION_DIR = hermes_home / "iris_notifications"
 NOTIFICATION_DIR.mkdir(parents=True, exist_ok=True)
 
+CHANNELS_DIR = hermes_home / "iris_channels"
+CHANNELS_DIR.mkdir(parents=True, exist_ok=True)
+
 session_activities: dict[str, list] = {}
+channel_private_histories: dict[str, list] = {}
+
+
+def _channel_path(channel_id: str) -> Path:
+    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", channel_id)
+    return CHANNELS_DIR / f"{safe}.json"
+
+
+def _load_channel_messages(channel_id: str) -> list[dict]:
+    path = _channel_path(channel_id)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[iris-bridge] Failed to load channel transcript for {channel_id}: {e}")
+        return []
+
+
+def _save_channel_messages(channel_id: str, messages: list[dict]) -> None:
+    path = _channel_path(channel_id)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(messages, default=str))
+        tmp.replace(path)
+    except Exception as e:
+        print(f"[iris-bridge] Failed to save channel transcript for {channel_id}: {e}")
+
+
+def _ensure_public_channel_session(channel_id: str) -> None:
+    try:
+        existing = session_db.get_session_title(channel_id)
+        if existing is None:
+            cfg = _get_model_info()
+            session_db.create_session(session_id=channel_id, source="iris", model=cfg["model"])
+    except Exception:
+        pass
+
+
+def _append_channel_message(channel_id: str, role: str, content: str, agent_id: str | None = None) -> None:
+    msgs = _load_channel_messages(channel_id)
+    msgs.append({
+        "id": uuid.uuid4().hex,
+        "role": role,
+        "content": content,
+        "timestamp": time.time(),
+        "agentId": agent_id,
+    })
+    _save_channel_messages(channel_id, msgs)
+
+
+def _recent_channel_context(channel_id: str, limit: int = 18) -> str:
+    msgs = _load_channel_messages(channel_id)[-limit:]
+    lines = []
+    for m in msgs:
+        role = m.get("role", "assistant")
+        content = str(m.get("content", "")).strip()
+        if not content:
+            continue
+        if role == "user":
+            author = "user"
+        elif role == "divider":
+            author = "divider"
+        else:
+            author = m.get("agentId") or "hermes"
+        lines.append(f"[{author}] {content}")
+    return "\n".join(lines)
+
+
+def _extract_agent_mentions(text: str) -> tuple[list[str], str]:
+    mentions = re.findall(r"@([a-zA-Z0-9_-]+)", text)
+    agent_mentions = [m.lower() for m in mentions if m.lower() in PROFILE_NAMES]
+    if not agent_mentions:
+        return [], text.strip()
+    stripped = re.sub(r"(?:^|\s)@(?:hermes|talos|icarus|charon|nyx)\b", "", text, flags=re.IGNORECASE).strip()
+    return list(dict.fromkeys(agent_mentions)), stripped or text.strip()
+
+
+def _run_channel_agent(channel_id: str, prompt_text: str, agent_id: str) -> None:
+    runtime_manager = get_runtime_manager()
+    public_context = _recent_channel_context(channel_id)
+
+    try:
+        private_session_id = f"channel:{channel_id}:{agent_id}"
+        channel_prompt = (
+            f"You are participating in shared channel #{channel_id}.\n"
+            f"Recent public channel transcript:\n{public_context or '[empty]'}\n\n"
+            f"Latest addressed message:\n{prompt_text}\n\n"
+            f"Reply directly into the shared channel as {agent_id}. Keep your own identity."
+        )
+
+        result = runtime_manager.run(
+            profile=agent_id,
+            session_id=private_session_id,
+            message=channel_prompt,
+            history=channel_private_histories.get(private_session_id, []),
+            emit=lambda _event_type, _data: None,
+            images=None,
+            attachments=None,
+        )
+
+        if result and "messages" in result:
+            channel_private_histories[private_session_id] = result["messages"]
+
+        response = result.get("final_response", "") if result else ""
+        if not response:
+            return
+        response = _process_media_refs(response, channel_id)
+        _append_channel_message(channel_id, "assistant", response, agent_id)
+        try:
+            session_db.append_message(channel_id, "assistant", content=response)
+        except Exception:
+            pass
+        emit("hermes.message", {
+            "session_id": channel_id,
+            "text": response,
+            "agentId": agent_id,
+            "timestamp": time.time(),
+        })
+    except Exception as e:
+        print(f"[iris-bridge] channel agent error ({agent_id} in {channel_id}): {e}", flush=True)
 
 
 def _save_activities(session_id: str):
@@ -210,6 +339,7 @@ def emit(event_type: str, data: dict = None):
             text = (data or {}).get("text", "")
             if text:
                 _session_stream_buffers.setdefault(sid, []).append(text)
+
 
 
 def _write_desktop_notification(session_id: str, summary: str):
@@ -348,15 +478,12 @@ def _check_ws_auth(data: dict) -> bool:
 # ─── Agent runner ───
 
 def run_agent_sync(session_id: str, message: str, images: list = None, attachments: list = None):
-    """Run agent.run_conversation in a background thread."""
+    """Run agent.run_conversation in an isolated profile worker."""
     try:
+        print(f"[iris-bridge] run_agent_sync: session={session_id}, msg={str(message)[:50]}", flush=True)
         cfg = adapter.reload_config()
-
-        if session_id not in sessions:
-            sessions[session_id] = {
-                "agent": adapter.create_agent(session_id, {"emit": emit}, session_db),
-                "history": [],
-            }
+        profile = resolve_profile_for_session(session_id)
+        runtime = get_runtime_manager().ensure(profile)
 
         # Auto-create session in DB if needed
         try:
@@ -366,29 +493,17 @@ def run_agent_sync(session_id: str, message: str, images: list = None, attachmen
         except Exception:
             pass
 
-        session = sessions[session_id]
-        agent = session["agent"]
-
         cancel_flags[session_id] = False
-        emit("response.started", {"session_id": session_id})
+        emit("response.started", {"session_id": session_id, "agentId": profile})
 
-        # Build the user message — handle images for multimodal
-        user_input = message
-        if images:
-            # Convert to Anthropic multimodal content blocks
-            content_blocks = [{"type": "text", "text": message}]
-            for img in images:
-                content_blocks.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": img.get("mime", "image/png"),
-                        "data": img.get("data", ""),
-                    }
-                })
-            user_input = content_blocks
-
-        result = adapter.run_conversation(agent, user_input, session["history"])
+        result = runtime.run(
+            session_id=session_id,
+            message=message,
+            history=sessions.get(session_id, {}).get("history", []),
+            emit=emit,
+            images=images,
+            attachments=attachments,
+        )
 
         # Check if cancelled
         if cancel_flags.get(session_id):
@@ -397,29 +512,19 @@ def run_agent_sync(session_id: str, message: str, images: list = None, attachmen
             running_threads.pop(session_id, None)
             return
 
-        # Update history
+        session = sessions.setdefault(session_id, {"history": [], "profile": profile})
         if result and "messages" in result:
             session["history"] = result["messages"]
 
         final_response = result.get("final_response", "") if result else ""
-
-        # Fallback: if agent returned no final_response, use accumulated stream text
         if not final_response:
             streamed = "".join(_session_stream_buffers.get(session_id, []))
             if streamed:
                 final_response = streamed.strip()
         _session_stream_buffers.pop(session_id, None)
 
-        # Inline image paths (MEDIA: refs + auto-detected /tmp/*.png etc.)
         if final_response:
             final_response = _process_media_refs(final_response, session_id)
-
-        # Persist assistant response
-        if final_response:
-            try:
-                session_db.append_message(session_id, "assistant", content=final_response)
-            except Exception as e:
-                print(f"[iris-bridge] Failed to persist assistant message: {e}")
 
         _save_activities(session_id)
 
@@ -427,13 +532,12 @@ def run_agent_sync(session_id: str, message: str, images: list = None, attachmen
             "session_id": session_id,
             "final_response": final_response,
             "api_calls": result.get("api_calls", 0) if result else 0,
+            "agentId": profile,
         })
 
-        # Desktop notification if no WS clients connected
         if not clients and final_response:
             _write_desktop_notification(session_id, final_response[:200])
 
-        # Push notification to mobile devices (only if no one is in foreground)
         if final_response:
             preview = final_response[:200].replace("\n", " ").strip()
             _send_push_notification("Hermes", preview, session_id)
@@ -455,6 +559,7 @@ def run_agent_sync(session_id: str, message: str, images: list = None, attachmen
         emit("response.error", {
             "session_id": session_id,
             "error": error_msg,
+            "agentId": resolve_profile_for_session(session_id),
         })
         running_threads.pop(session_id, None)
 
@@ -480,6 +585,21 @@ async def health():
         "status": "ok",
         "uptime": round(time.time() - _start_time, 1),
         "connected_clients": len(clients),
+    }
+
+
+@app.post("/internal/restart-profile")
+async def internal_restart_profile(request: Request):
+    payload = await request.json()
+    profile = str(payload.get("profile", "")).strip()
+    if profile not in PROFILE_NAMES:
+        return JSONResponse(status_code=400, content={"status": "error", "error": f"unknown profile: {profile}"})
+    runtime = get_runtime_manager().restart(profile)
+    return {
+        "status": "ok",
+        "profile": profile,
+        "pid": runtime.process.pid if runtime.process else None,
+        "restart_count": runtime.restart_count,
     }
 
 
@@ -578,7 +698,7 @@ async def http_get_session(session_id: str, request: Request):
     for m in history:
         role = m.get("role", "")
         content = m.get("content", "")
-        if role not in ("user", "assistant"):
+        if role not in ("user", "assistant", "divider"):
             continue
         if not content or not content.strip():
             continue
@@ -793,7 +913,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # ─── send_message ───
             if action == "send_message":
-                session_id = msg.get("session_id", "default")
+                # Target-first routing: "dm:talos" or "channel:general"
+                target = msg.get("target")
+                if target:
+                    kind, _, tid = target.partition(":")
+                    session_id = "home" if (kind == "dm" and tid == "hermes") else tid
+                else:
+                    kind = "channel"
+                    tid = msg.get("session_id", "default")
+                    session_id = tid
                 text = msg.get("text", "").strip()
                 if not text:
                     continue
@@ -801,22 +929,81 @@ async def websocket_endpoint(websocket: WebSocket):
                 images = msg.get("images")  # [{data: "base64...", mime: "image/png"}]
                 attachments = msg.get("attachments")
 
-                emit("message.user", {
-                    "session_id": session_id,
-                    "text": text,
-                })
+                if kind == "channel":
+                    # Public channel transcript + mention-triggered multi-agent posts
+                    _ensure_public_channel_session(session_id)
+                    _append_channel_message(session_id, "user", text)
+                    try:
+                        session_db.append_message(session_id, "user", content=text)
+                    except Exception:
+                        pass
+                    emit("message.user", {
+                        "session_id": session_id,
+                        "text": text,
+                    })
+                    mentioned_agents, stripped_prompt = _extract_agent_mentions(text)
+                    target_agents = mentioned_agents or ["hermes"]
+                    for idx, agent_id in enumerate(target_agents):
+                        thread = threading.Thread(
+                            target=_run_channel_agent,
+                            args=(session_id, stripped_prompt, agent_id),
+                            daemon=True,
+                        )
+                        running_threads[f"{session_id}:{agent_id}:{idx}"] = thread
+                        thread.start()
+                else:
+                    emit("message.user", {
+                        "session_id": session_id,
+                        "text": text,
+                    })
+                    # Note: AIAgent persists messages via session_db internally
+                    # Don't double-persist here
+                    thread = threading.Thread(
+                        target=run_agent_sync,
+                        args=(session_id, text, images, attachments),
+                        daemon=True,
+                    )
+                    running_threads[session_id] = thread
+                    thread.start()
 
-                try:
-                    session_db.append_message(session_id, "user", content=text)
-                except Exception as e:
-                    print(f"[iris-bridge] Failed to persist user message: {e}")
+            # ─── agent_post: an agent speaks in a channel as itself ───
+            elif action == "agent_post":
+                agent_id = msg.get("agent_id", "")  # e.g. "talos"
+                channel_id = msg.get("channel_id", "general")
+                text = msg.get("text", "").strip()
+                if not agent_id or not text:
+                    continue
+
+                def run_agent_post(aid: str, cid: str, prompt: str):
+                    """Run agent and post result to channel."""
+                    try:
+                        profile = aid if aid in ("hermes", "talos", "icarus", "charon", "nyx") else "hermes"
+                        post_agent = adapter.create_agent(
+                            f"{cid}-{aid}", {"emit": lambda *a, **k: None}, session_db, profile=profile
+                        )
+                        result = adapter.run_conversation(post_agent, prompt, [])
+                        response = result.get("final_response", "") if result else ""
+                        if response:
+                            post_event = {
+                                "type": "hermes.message",
+                                "session_id": cid,
+                                "text": response,
+                                "agentId": aid,
+                                "timestamp": time.time(),
+                            }
+                            emit("hermes.message", post_event)
+                            try:
+                                session_db.append_message(cid, "assistant", content=response)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        print(f"[iris-bridge] agent_post error: {e}", flush=True)
 
                 thread = threading.Thread(
-                    target=run_agent_sync,
-                    args=(session_id, text, images, attachments),
+                    target=run_agent_post,
+                    args=(agent_id, channel_id, text),
                     daemon=True,
                 )
-                running_threads[session_id] = thread
                 thread.start()
 
             # ─── cancel_response ───
@@ -832,13 +1019,26 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                     running_threads.pop(session_id, None)
 
+            # ─── insert_divider ───
+            elif action == "insert_divider":
+                session_id = msg.get("session_id", HOME_SESSION_ID)
+                text = msg.get("text", "--- Session Boundary ---")
+                try:
+                    session_db.append_message(session_id, "divider", content=text)
+                    emit("session.divider_inserted", {
+                        "session_id": session_id,
+                        "text": text
+                    })
+                except Exception as e:
+                    print(f"[iris-bridge] Failed to insert divider: {e}")
+
             # ─── new_session ───
             elif action == "new_session":
                 cfg = _get_model_info()
                 sid = make_session_id()
                 session_db.create_session(session_id=sid, source="iris", model=cfg["model"])
                 sessions[sid] = {
-                    "agent": adapter.create_agent(sid, {"emit": emit}, session_db),
+                    "profile": resolve_profile_for_session(sid),
                     "history": [],
                 }
                 emit("session.created", {"session_id": sid})
@@ -861,25 +1061,51 @@ async def websocket_endpoint(websocket: WebSocket):
             # ─── resume_session ───
             elif action == "resume_session":
                 sid = msg.get("session_id", "")
+                print(f"[iris-bridge] resume_session: {sid}", flush=True)
                 if not sid:
                     continue
-                history = session_db.get_messages_as_conversation(sid)
-                sessions[sid] = {
-                    "agent": adapter.create_agent(sid, {"emit": emit}, session_db),
-                    "history": list(history),
-                }
+                msg_limit = msg.get("limit", 50)  # Only load last N messages
+                channel_messages = _load_channel_messages(sid)
+                if channel_messages:
+                    full_history = [
+                        {
+                            "role": m.get("role", "assistant"),
+                            "content": m.get("content", ""),
+                            "timestamp": m.get("timestamp", 0),
+                            "agentId": m.get("agentId"),
+                        }
+                        for m in channel_messages
+                    ]
+                else:
+                    history = session_db.get_messages_as_conversation(sid)
+                    full_history = list(history)
+                if sid in sessions:
+                    sessions[sid]["history"] = full_history
+                else:
+                    profile = resolve_profile_for_session(sid)
+                    sessions[sid] = {
+                        "profile": profile,
+                        "history": full_history,
+                    }
+                # Only send last N messages to client (paginated)
+                recent_history = full_history[-msg_limit:] if len(full_history) > msg_limit else full_history
+                # Deduplicate consecutive messages with same role+content
                 formatted = []
-                for m in history:
+                for m in recent_history:
                     role = m.get("role", "")
                     content = m.get("content", "")
-                    if role not in ("user", "assistant"):
+                    if role not in ("user", "assistant", "divider"):
                         continue
                     if not content or not content.strip():
+                        continue
+                    # Skip if identical to the previous message
+                    if formatted and formatted[-1]["role"] == role and formatted[-1]["content"] == content:
                         continue
                     formatted.append({
                         "role": role,
                         "content": content,
-                        "timestamp": "",
+                        "timestamp": m.get("timestamp", ""),
+                        "agentId": m.get("agentId"),
                     })
                 saved_activities = _load_activities(sid)
                 session_activities[sid] = saved_activities
@@ -889,6 +1115,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "messages": formatted,
                     "activities": saved_activities,
                     "title": session_db.get_session_title(sid) or "",
+                    "running_sessions": list(running_threads.keys()),
                 })
 
             # ─── delete_session ───
@@ -922,6 +1149,69 @@ async def websocket_endpoint(websocket: WebSocket):
                     "memory": memory,
                     "user": user,
                 })
+
+            # ─── get_agents (live Pantheon state) ───
+            elif action == "get_agents":
+                from hermes_adapter import get_profile_home, get_config as _get_cfg, get_agent_name as _get_name
+                runtime_manager = get_runtime_manager()
+                statuses = {s.profile: s for s in runtime_manager.statuses()}
+                agents_out = []
+                for agent_id in ["hermes", "talos", "icarus", "charon", "nyx"]:
+                    home = get_profile_home(agent_id)
+                    # Config
+                    cfg = _get_cfg(home)
+                    m = cfg.get("model", {})
+                    model = m.get("default", "") if isinstance(m, dict) else str(m)
+                    provider = m.get("provider", "") if isinstance(m, dict) else ""
+                    # Name from SOUL
+                    name = _get_name(home)
+                    # Status
+                    runtime = statuses.get(agent_id)
+                    is_running = bool(runtime and runtime.alive)
+                    # Memory count
+                    mem_file = home / "memories" / "MEMORY.md"
+                    mem_count = 0
+                    if mem_file.exists():
+                        mem_count = sum(1 for line in mem_file.read_text().splitlines() if line.strip().startswith("- "))
+                    # Skill count
+                    skills_dir = home / "skills"
+                    skill_count = 0
+                    if skills_dir.exists():
+                        for cat in skills_dir.iterdir():
+                            if cat.is_dir():
+                                for sk in cat.iterdir():
+                                    if sk.is_dir() and (sk / "SKILL.md").exists():
+                                        skill_count += 1
+                    # Session info
+                    sid = HOME_SESSION_ID if agent_id == "hermes" else agent_id
+                    msg_count = 0
+                    last_active = 0
+                    try:
+                        msgs = session_db.get_messages_as_conversation(sid)
+                        msg_count = len(list(msgs))
+                        # Get last_active from sessions list
+                        all_sessions = session_db.list_sessions()
+                        for s in all_sessions:
+                            if s.get("id") == sid or s.get("session_id") == sid:
+                                last_active = s.get("last_active", 0)
+                                break
+                    except Exception:
+                        pass
+                    agents_out.append({
+                        "id": agent_id,
+                        "name": name,
+                        "model": model,
+                        "provider": provider,
+                        "status": "running" if is_running else "idle",
+                        "memorySize": mem_count,
+                        "skillCount": skill_count,
+                        "messageCount": msg_count,
+                        "lastActive": last_active,
+                        "restartCount": runtime.restart_count if runtime else 0,
+                        "lastError": runtime.last_error if runtime else None,
+                        "mode": "daemon" if agent_id == "nyx" else "agent",
+                    })
+                await websocket.send_json({"type": "agents.list", "agents": agents_out})
 
             # ─── get_config ───
             elif action == "get_config":
@@ -1144,7 +1434,9 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as e:
+        import traceback
         print(f"[iris-bridge] WebSocket error: {e}")
+        traceback.print_exc()
     finally:
         clients.discard(websocket)
         foreground_clients.discard(websocket)
@@ -1160,13 +1452,53 @@ if _OUT_DIR.exists():
     app.mount("/", StaticFiles(directory=str(_OUT_DIR), html=True), name="static")
 
 
+class _RestartSocketHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        try:
+            raw = self.request.recv(4096).decode("utf-8", errors="ignore")
+            body = raw.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in raw else "{}"
+            payload = json.loads(body or "{}")
+            profile = str(payload.get("profile", "")).strip()
+            if profile not in PROFILE_NAMES:
+                response = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
+                self.request.sendall(response)
+                return
+            runtime = get_runtime_manager().restart(profile)
+            data = json.dumps({"status": "ok", "profile": profile, "pid": runtime.process.pid if runtime.process else None}).encode("utf-8")
+            response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str(len(data)).encode("utf-8") + b"\r\n\r\n" + data
+            self.request.sendall(response)
+        except Exception:
+            try:
+                self.request.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+            except Exception:
+                pass
+
+
+class _UnixRestartServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 # ─── Startup ───
+
+_restart_socket_server: Optional[_UnixRestartServer] = None
+_restart_socket_thread: Optional[threading.Thread] = None
+
 
 @app.on_event("startup")
 async def startup():
-    global _main_loop
+    global _main_loop, _restart_socket_server, _restart_socket_thread
     _main_loop = asyncio.get_running_loop()
     cfg = _get_model_info()
+    try:
+        if os.path.exists(_RESTART_SOCKET_PATH):
+            os.unlink(_RESTART_SOCKET_PATH)
+        _restart_socket_server = _UnixRestartServer(_RESTART_SOCKET_PATH, _RestartSocketHandler)
+        _restart_socket_thread = threading.Thread(target=_restart_socket_server.serve_forever, daemon=True, name="iris-restart-socket")
+        _restart_socket_thread.start()
+        os.environ["IRIS_PROFILE_RESTART_SOCKET"] = _RESTART_SOCKET_PATH
+    except Exception as e:
+        print(f"[iris-bridge] Failed to start restart socket: {e}")
 
     # Auto-create persistent Home session if it doesn't exist
     try:
@@ -1177,6 +1509,14 @@ async def startup():
             print(f"[iris-bridge] Created persistent Home session")
     except Exception as e:
         print(f"[iris-bridge] Failed to create home session: {e}")
+
+    # Start all profile runtimes; Nyx will supervise them via the restart RPC.
+    try:
+        runtime_manager = get_runtime_manager()
+        runtime_manager.start_profiles(list(PROFILE_NAMES))
+        print(f"[iris-bridge] Started profile runtimes: {', '.join(PROFILE_NAMES)}")
+    except Exception as e:
+        print(f"[iris-bridge] Failed to start profile runtimes: {e}")
 
     print(f"[iris-bridge] Starting on http://0.0.0.0:{PORT}")
     print(f"[iris-bridge] Model: {cfg['model']} via {cfg['provider']}")
@@ -1189,6 +1529,23 @@ async def startup():
         print(f"[iris-bridge] Auth enabled (IRIS_API_KEY set)")
     else:
         print(f"[iris-bridge] Auth disabled (dev mode)")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _restart_socket_server, _restart_socket_thread
+    try:
+        if _restart_socket_server:
+            _restart_socket_server.shutdown()
+            _restart_socket_server.server_close()
+    finally:
+        _restart_socket_server = None
+        _restart_socket_thread = None
+        try:
+            if os.path.exists(_RESTART_SOCKET_PATH):
+                os.unlink(_RESTART_SOCKET_PATH)
+        except Exception:
+            pass
 
 
 # ─── Main ───

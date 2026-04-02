@@ -5,7 +5,8 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { ChevronDown, FileText, Search, Terminal, Brain, Globe, GitFork, Wrench } from "lucide-react"
 import { hapticLight, hapticMedium } from "@/lib/haptics"
-
+import { markdownComponents } from "@/lib/markdown-components"
+import { IMAGE_TOOL_RE, findImageInArgs } from "@/lib/image-utils"
 import { truncateJsonValues } from "@/lib/utils"
 import type {
   HermesMessage,
@@ -14,38 +15,17 @@ import type {
   ToolStatus,
   ActivityEntry,
 } from "@/hooks/use-hermes-bridge"
+import { DEFAULT_AGENTS } from "@/components/panels/pantheon-panel"
 
 /* ─── Status dot colors ─── */
 export const statusDotColor: Record<ToolStatus, string> = {
-  preparing: "rgba(255,255,255,0.4)",
-  running: "rgba(255,255,255,0.7)",
+  preparing: "var(--color-text-tertiary)",
+  running: "var(--color-text-secondary)",
   success: "#34C759",
   error: "#EF4444",
   pending: "#F59E0B",
 }
 
-
-/* ─── Image extensions for detection ─── */
-const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg)(\?|$)/i
-const IMAGE_TOOL_RE = /screenshot|vision|image|browser_snapshot/i
-
-function looksLikeImagePath(val: unknown): string | null {
-  if (typeof val !== "string") return null
-  if (IMAGE_EXT_RE.test(val) || /screenshot/i.test(val)) return val
-  return null
-}
-
-function findImageInArgs(
-  args: Record<string, unknown> | string | undefined,
-): string | null {
-  if (!args) return null
-  if (typeof args === "string") return looksLikeImagePath(args)
-  for (const v of Object.values(args)) {
-    const found = looksLikeImagePath(v)
-    if (found) return found
-  }
-  return null
-}
 
 /* ─── Tool icon helper ─── */
 const FILE_TOOLS = /read_file|write_file|edit_file|create_file|list_dir|list_files/i
@@ -57,7 +37,7 @@ const SUBAGENT_TOOLS = /subagent|agent|dispatch/i
 
 function ToolIcon({ name }: { name: string }) {
   const size = 12
-  const style = { color: "rgba(255,255,255,0.25)", flexShrink: 0 as const }
+  const style = { color: "var(--color-text-ghost)", flexShrink: 0 as const }
 
   if (FILE_TOOLS.test(name)) return <FileText size={size} style={style} />
   if (SEARCH_TOOLS.test(name)) return <Search size={size} style={style} />
@@ -66,88 +46,6 @@ function ToolIcon({ name }: { name: string }) {
   if (SUBAGENT_TOOLS.test(name)) return <GitFork size={size} style={style} />
   if (MCP_TOOLS.test(name)) return <Globe size={size} style={style} />
   return <Wrench size={size} style={style} />
-}
-
-/* ─── Code Block with Copy Button ─── */
-function CodeBlock({
-  children,
-  className,
-}: {
-  children?: React.ReactNode
-  className?: string
-}) {
-  const [copied, setCopied] = React.useState(false)
-  const isBlock = className?.includes("language-")
-  const language = className?.replace("language-", "") || ""
-
-  if (isBlock) {
-    return (
-      <code
-        style={{
-          display: "block",
-          position: "relative" as const,
-          fontFamily: "var(--font-geist-mono), monospace",
-          fontSize: 13,
-          background: "rgba(255,255,255,0.02)",
-          borderRadius: 4,
-          padding: "8px 12px",
-          overflowX: "auto",
-          lineHeight: 1.5,
-        }}
-      >
-        {language && (
-          <span
-            style={{
-              position: "absolute",
-              top: 4,
-              right: copied ? 52 : 8,
-              fontSize: 10,
-              color: "rgba(255,255,255,0.2)",
-            }}
-          >
-            {language}
-          </span>
-        )}
-        <button
-          onClick={() => {
-            navigator.clipboard.writeText(String(children))
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-          }}
-          style={{
-            position: "absolute",
-            top: 4,
-            right: 4,
-            background: "rgba(255,255,255,0.06)",
-            border: "none",
-            borderRadius: 4,
-            padding: "6px 10px",
-            cursor: "pointer",
-            fontSize: 11,
-            color: "rgba(255,255,255,0.3)",
-            minHeight: 32,
-          }}
-        >
-          {copied ? "Copied!" : "Copy"}
-        </button>
-        {children}
-      </code>
-    )
-  }
-
-  return (
-    <code
-      style={{
-        fontFamily: "var(--font-geist-mono), monospace",
-        fontSize: 13,
-        background: "rgba(255,255,255,0.06)",
-        borderRadius: 3,
-        padding: "1px 5px",
-      }}
-    >
-      {children}
-    </code>
-  )
 }
 
 /* ─── Streaming text — fades each new chunk in smoothly ─── */
@@ -199,179 +97,6 @@ function StreamingText({ content }: { content: string }) {
   )
 }
 
-/* ─── Shared Markdown Components ─── */
-export const markdownComponents = {
-  p: ({ children }: { children?: React.ReactNode }) => (
-    <p style={{ margin: "4px 0" }}>{children}</p>
-  ),
-  h1: ({ children }: { children?: React.ReactNode }) => (
-    <h1
-      style={{
-        fontSize: 20,
-        fontWeight: 700,
-        marginTop: 16,
-        marginBottom: 8,
-        color: "inherit",
-      }}
-    >
-      {children}
-    </h1>
-  ),
-  h2: ({ children }: { children?: React.ReactNode }) => (
-    <h2
-      style={{
-        fontSize: 17,
-        fontWeight: 600,
-        marginTop: 16,
-        marginBottom: 8,
-        color: "inherit",
-      }}
-    >
-      {children}
-    </h2>
-  ),
-  h3: ({ children }: { children?: React.ReactNode }) => (
-    <h3
-      style={{
-        fontSize: 15,
-        fontWeight: 600,
-        marginTop: 16,
-        marginBottom: 8,
-        color: "inherit",
-      }}
-    >
-      {children}
-    </h3>
-  ),
-  h4: ({ children }: { children?: React.ReactNode }) => (
-    <h4
-      style={{
-        fontSize: 14,
-        fontWeight: 600,
-        marginTop: 16,
-        marginBottom: 8,
-        color: "inherit",
-      }}
-    >
-      {children}
-    </h4>
-  ),
-  code: CodeBlock,
-  pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre style={{ margin: "8px 0", overflowX: "auto", maxWidth: "100%" }}>{children}</pre>
-  ),
-  ul: ({ children }: { children?: React.ReactNode }) => (
-    <ul
-      style={{ listStyleType: "disc", paddingLeft: 20, margin: "8px 0" }}
-    >
-      {children}
-    </ul>
-  ),
-  ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol
-      style={{ listStyleType: "decimal", paddingLeft: 20, margin: "8px 0" }}
-    >
-      {children}
-    </ol>
-  ),
-  li: ({ children }: { children?: React.ReactNode }) => (
-    <li style={{ margin: "4px 0", display: "list-item", lineHeight: 1.6 }}>
-      {children}
-    </li>
-  ),
-  strong: ({ children }: { children?: React.ReactNode }) => (
-    <strong style={{ fontWeight: 600 }}>{children}</strong>
-  ),
-  a: ({
-    children,
-    href,
-  }: {
-    children?: React.ReactNode
-    href?: string
-  }) => (
-    <a
-      href={href}
-      style={{ color: "rgba(255,255,255,0.7)", textDecoration: "none" }}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
-      {children}
-    </a>
-  ),
-  // eslint-disable-next-line @next/next/no-img-element
-  img: (props: React.ImgHTMLAttributes<HTMLImageElement>) => props.src ? (
-    <img
-      src={props.src}
-      alt={props.alt || ""}
-      onClick={() => window.open(props.src as string, "_blank")}
-      style={{
-        maxWidth: "100%",
-        borderRadius: 8,
-        margin: "8px 0",
-        border: "1px solid rgba(255,255,255,0.06)",
-        cursor: "pointer",
-        display: "block",
-      }}
-    />
-  ) : null,
-  blockquote: ({ children }: { children?: React.ReactNode }) => (
-    <blockquote
-      style={{
-        margin: "8px 0",
-        paddingLeft: 12,
-        borderLeft: "2px solid rgba(255,255,255,0.08)",
-        color: "rgba(255,255,255,0.5)",
-      }}
-    >
-      {children}
-    </blockquote>
-  ),
-  table: ({ children }: { children?: React.ReactNode }) => (
-    <div style={{ overflowX: "auto", margin: "10px 0", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)" }}>
-      <table
-        style={{
-          borderCollapse: "collapse" as const,
-          fontSize: 13,
-          width: "100%",
-          minWidth: 300,
-        }}
-      >
-        {children}
-      </table>
-    </div>
-  ),
-  thead: ({ children }: { children?: React.ReactNode }) => (
-    <thead style={{ background: "rgba(255,255,255,0.03)" }}>{children}</thead>
-  ),
-  th: ({ children }: { children?: React.ReactNode }) => (
-    <th
-      style={{
-        textAlign: "left" as const,
-        padding: "8px 12px",
-        borderBottom: "1px solid rgba(255,255,255,0.08)",
-        fontWeight: 600,
-        fontSize: 12,
-        color: "rgba(255,255,255,0.5)",
-        whiteSpace: "nowrap" as const,
-      }}
-    >
-      {children}
-    </th>
-  ),
-  td: ({ children }: { children?: React.ReactNode }) => (
-    <td
-      style={{
-        padding: "6px 12px",
-        borderBottom: "1px solid rgba(255,255,255,0.03)",
-        fontSize: 13,
-        lineHeight: 1.5,
-      }}
-    >
-      {children}
-    </td>
-  ),
-}
-
 /* ─── Skeleton Loading ─── */
 export function SkeletonLoading() {
   return (
@@ -383,7 +108,7 @@ export function SkeletonLoading() {
             width: 6,
             height: 6,
             borderRadius: "50%",
-            background: "rgba(255,255,255,0.25)",
+            background: "var(--color-text-ghost)",
             animation: `typing-dot 1.4s ease-in-out ${i * 0.2}s infinite`,
           }}
         />
@@ -426,7 +151,7 @@ function ReasoningTrace({
               width: 4,
               height: 4,
               borderRadius: "50%",
-              background: "rgba(255,255,255,0.7)",
+              background: "var(--color-text-secondary)",
               animation: "pulse 1.5s ease-in-out infinite",
             }}
           />
@@ -435,7 +160,7 @@ function ReasoningTrace({
           style={{
             fontSize: 11,
             fontWeight: 500,
-            color: "rgba(255,255,255,0.2)",
+            color: "var(--color-text-muted)",
           }}
         >
           {isStreaming ? "Thinking..." : "Thinking"}
@@ -443,7 +168,7 @@ function ReasoningTrace({
         <ChevronDown
           size={12}
           style={{
-            color: "rgba(255,255,255,0.15)",
+            color: "var(--color-text-faint)",
             transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
             transition: "transform 200ms ease",
           }}
@@ -454,7 +179,7 @@ function ReasoningTrace({
           className="reasoning-content"
           style={{
             fontSize: 12,
-            color: "rgba(255,255,255,0.15)",
+            color: "var(--color-text-faint)",
             lineHeight: 1.5,
             paddingTop: 4,
           }}
@@ -517,10 +242,10 @@ function InlineToolCall({
             fontSize: 11,
             fontWeight: isActive ? 500 : 400,
             color: isActive
-              ? "rgba(255,255,255,0.45)"
+              ? "var(--color-text-tertiary)"
               : effectiveStatus === "error"
                 ? "rgba(239,68,68,0.5)"
-                : "rgba(255,255,255,0.22)",
+                : "var(--color-text-muted)",
             fontFamily: "var(--font-geist-mono), monospace",
           }}
         >
@@ -530,7 +255,7 @@ function InlineToolCall({
           <span
             style={{
               fontSize: 11,
-              color: "rgba(255,255,255,0.12)",
+              color: "var(--color-text-quaternary)",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap" as const,
@@ -546,7 +271,7 @@ function InlineToolCall({
               width: 4,
               height: 4,
               borderRadius: "50%",
-              background: "rgba(255,255,255,0.7)",
+              background: "var(--color-text-secondary)",
               animation: "pulse 1.5s ease-in-out infinite",
               flexShrink: 0,
             }}
@@ -555,7 +280,7 @@ function InlineToolCall({
         <ChevronDown
           size={10}
           style={{
-            color: "rgba(255,255,255,0.08)",
+            color: "var(--color-border-subtle)",
             transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
             transition: "transform 200ms ease",
             flexShrink: 0,
@@ -568,13 +293,13 @@ function InlineToolCall({
             <pre
               style={{
                 fontSize: 11,
-                color: "rgba(255,255,255,0.3)",
+                color: "var(--color-text-tertiary)",
                 fontFamily: "var(--font-geist-mono), monospace",
                 margin: "2px 0 4px 0",
                 padding: "6px 8px",
-                background: "rgba(255,255,255,0.02)",
+                background: "var(--color-hover-bg)",
                 borderRadius: 4,
-                borderLeft: "2px solid rgba(255,255,255,0.15)",
+                borderLeft: "2px solid var(--color-text-faint)",
                 overflow: "auto",
                 whiteSpace: "pre-wrap" as const,
                 maxHeight: 150,
@@ -594,7 +319,7 @@ function InlineToolCall({
                 style={{
                   maxHeight: 160,
                   borderRadius: 6,
-                  border: "1px solid rgba(255,255,255,0.06)",
+                  border: "1px solid var(--color-border-dim)",
                   cursor: "pointer",
                   display: "block",
                 }}
@@ -624,7 +349,7 @@ export function ApprovalInline({
       <div>
         <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
           <span
-            style={{ fontSize: 11, fontWeight: 500, color: "rgba(255,255,255,0.7)" }}
+            style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-secondary)" }}
           >
             {agentName}
           </span>
@@ -632,7 +357,7 @@ export function ApprovalInline({
             style={{
               fontSize: 11,
               fontWeight: 400,
-              color: "rgba(255,255,255,0.3)",
+              color: "var(--color-text-tertiary)",
             }}
           >
             Now
@@ -641,7 +366,7 @@ export function ApprovalInline({
         <p
           style={{
             fontSize: 14,
-            color: "rgba(255,255,255,0.6)",
+            color: "var(--color-text-secondary)",
             margin: 0,
           }}
         >
@@ -654,14 +379,14 @@ export function ApprovalInline({
   return (
     <div>
       <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
-        <span style={{ fontSize: 11, fontWeight: 500, color: "rgba(255,255,255,0.7)" }}>
+        <span style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-secondary)" }}>
           Iris
         </span>
         <span
           style={{
             fontSize: 11,
             fontWeight: 400,
-            color: "rgba(255,255,255,0.3)",
+            color: "var(--color-text-tertiary)",
           }}
         >
           Now
@@ -670,7 +395,7 @@ export function ApprovalInline({
       <p
         style={{
           fontSize: 14,
-          color: "rgba(255,255,255,0.85)",
+          color: "var(--color-text-primary)",
           margin: 0,
           marginBottom: 8,
         }}
@@ -684,7 +409,7 @@ export function ApprovalInline({
           style={{
             fontSize: 13,
             fontWeight: 500,
-            color: "#34C759",
+            color: "var(--color-status-success)",
             background: "rgba(52,199,89,0.08)",
             border: "1px solid rgba(52,199,89,0.15)",
             borderRadius: 8,
@@ -701,9 +426,9 @@ export function ApprovalInline({
           style={{
             fontSize: 13,
             fontWeight: 500,
-            color: "rgba(255,255,255,0.4)",
-            background: "rgba(255,255,255,0.03)",
-            border: "1px solid rgba(255,255,255,0.06)",
+            color: "var(--color-text-tertiary)",
+            background: "var(--color-hover-bg)",
+            border: "1px solid var(--color-border-dim)",
             borderRadius: 8,
             cursor: "pointer",
             padding: "8px 16px",
@@ -752,7 +477,7 @@ function MessageContent({
                 maxWidth: "100%",
                 maxHeight: 320,
                 borderRadius: 8,
-                border: "1px solid rgba(255,255,255,0.06)",
+                border: "1px solid var(--color-border-dim)",
                 cursor: "pointer",
                 display: "block",
                 objectFit: "contain",
@@ -766,7 +491,7 @@ function MessageContent({
       {message.segments && message.segments.length > 0 ? (
         <div className="message-content" style={{
           fontSize: 14, fontWeight: 400, lineHeight: 1.6,
-          color: isError ? "rgba(239,68,68,0.6)" : "rgba(255,255,255,0.9)",
+          color: isError ? "rgba(239,68,68,0.6)" : "var(--color-text-primary)",
         }}>
           {message.segments.map((seg, i) => {
             if (seg.type === "text") {
@@ -790,7 +515,7 @@ function MessageContent({
           className="message-content"
           style={{
             fontSize: 14, fontWeight: 400, lineHeight: 1.6,
-            color: isError ? "rgba(239,68,68,0.6)" : isUser ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.9)",
+            color: isError ? "rgba(239,68,68,0.6)" : "var(--color-text-primary)",
           }}
         >
           {message.status === "streaming" ? (
@@ -821,6 +546,31 @@ function MessageEntryInner({
 }) {
   const isUser = message.role === "user"
   const isError = message.status === "error"
+  const isDivider = message.role === "divider"
+
+  if (isDivider) {
+    return (
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        margin: "28px 0 12px",
+      }}>
+        <div style={{ flex: 1, height: 1, background: "var(--color-border-dim)" }} />
+        <span style={{
+          fontSize: 10,
+          fontWeight: 500,
+          color: "var(--color-text-muted)",
+          letterSpacing: "0.02em",
+          flexShrink: 0,
+          whiteSpace: "nowrap" as const,
+        }}>
+          {message.content}
+        </span>
+        <div style={{ flex: 1, height: 1, background: "var(--color-border-dim)" }} />
+      </div>
+    )
+  }
 
   const contentBlock = (
     <MessageContent message={message} isUser={isUser} isError={isError} />
@@ -838,7 +588,7 @@ function MessageEntryInner({
         <div
           style={{
             maxWidth: "85%",
-            background: "rgba(255,255,255,0.06)",
+            background: "var(--color-border-dim)",
             borderRadius: 16,
             borderBottomRightRadius: 4,
             padding: "6px 12px",
@@ -869,24 +619,23 @@ function MessageEntryInner({
             marginBottom: 2,
           }}
         >
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 500,
-              color: isError
-                ? "rgba(239,68,68,0.5)"
-                : "rgba(255,255,255,0.5)",
-            }}
-          >
-            {isError ? "Error" : agentName}
-          </span>
+          {(() => {
+            const msgAgent = message.agentId ? DEFAULT_AGENTS.find(a => a.id === message.agentId) : null
+            const displayName = isError ? "Error" : (msgAgent ? msgAgent.name : agentName)
+            const displayColor = isError ? "rgba(239,68,68,0.5)" : (msgAgent ? msgAgent.color : "var(--color-text-secondary)")
+            return (
+              <span style={{ fontSize: 11, fontWeight: 500, color: displayColor }}>
+                {displayName}
+              </span>
+            )
+          })()}
           {message.status === "streaming" && (
             <span
               style={{
                 width: 4,
                 height: 4,
                 borderRadius: "50%",
-                background: "rgba(255,255,255,0.7)",
+                background: "var(--color-text-secondary)",
                 display: "inline-block",
                 animation: "pulse 1.5s ease-in-out infinite",
               }}
@@ -938,10 +687,11 @@ function withinTwoMinutes(a: string, b: string): boolean {
 function groupMessages(messages: HermesMessage[]): MessageGroup[] {
   const groups: MessageGroup[] = []
   for (const msg of messages) {
+    const senderKey = msg.role === "assistant" ? `assistant:${msg.agentId || "hermes"}` : msg.role
     const last = groups[groups.length - 1]
     if (
       last &&
-      last.senderId === msg.role &&
+      last.senderId === senderKey &&
       withinTwoMinutes(
         last.messages[last.messages.length - 1].timestamp,
         msg.timestamp,
@@ -949,7 +699,7 @@ function groupMessages(messages: HermesMessage[]): MessageGroup[] {
     ) {
       last.messages.push(msg)
     } else {
-      groups.push({ senderId: msg.role, messages: [msg] })
+      groups.push({ senderId: senderKey, messages: [msg] })
     }
   }
   return groups
@@ -959,9 +709,11 @@ function groupMessages(messages: HermesMessage[]): MessageGroup[] {
 export const MessageList = React.memo(function MessageList({
   messages,
   agentName,
+  agentColor,
 }: {
   messages: HermesMessage[]
   agentName: string
+  agentColor?: string
 }) {
   const groups = groupMessages(messages)
 
@@ -969,7 +721,15 @@ export const MessageList = React.memo(function MessageList({
     <div style={{ display: "flex", flexDirection: "column" }}>
       {groups.map((group, gi) => {
         const isUser = group.senderId === "user"
+        const isDividerGroup = group.senderId === "divider"
         const isError = group.messages[0].status === "error"
+
+        // Dividers render inline, no wrapper
+        if (isDividerGroup) {
+          return group.messages.map((msg) => (
+            <MessageEntry key={msg.id} message={msg} agentName="" />
+          ))
+        }
 
         return (
           <div
@@ -999,7 +759,7 @@ export const MessageList = React.memo(function MessageList({
                     <div
                       style={{
                         maxWidth: "85%",
-                        background: "rgba(255,255,255,0.06)",
+                        background: "var(--color-border-dim)",
                         borderRadius: 16,
                         borderBottomRightRadius: mi === group.messages.length - 1 ? 4 : 16,
                         padding: "10px 14px",
@@ -1015,7 +775,12 @@ export const MessageList = React.memo(function MessageList({
                 )
               }
 
-              // Assistant messages: left-aligned, no background
+              const msgAgent = msg.agentId ? DEFAULT_AGENTS.find(a => a.id === msg.agentId) : null
+              const accent = msgIsError
+                ? "rgba(239,68,68,0.45)"
+                : (msgAgent?.color || agentColor || "var(--color-text-secondary)")
+
+              // Assistant messages: left-aligned, accent rail per author
               return (
                 <div
                   key={msg.id}
@@ -1024,6 +789,9 @@ export const MessageList = React.memo(function MessageList({
                     display: "flex",
                     flexDirection: "column",
                     gap: 2,
+                    paddingLeft: 10,
+                    borderLeft: `1px solid ${accent}33`,
+                    marginLeft: 2,
                   }}
                 >
                   {showHeader && (
@@ -1041,10 +809,10 @@ export const MessageList = React.memo(function MessageList({
                           fontWeight: 500,
                           color: isError
                             ? "rgba(239,68,68,0.5)"
-                            : "rgba(255,255,255,0.5)",
+                            : (msgAgent?.color || agentColor || "var(--color-text-secondary)"),
                         }}
                       >
-                        {isError ? "Error" : agentName}
+                        {isError ? "Error" : (msgAgent?.name || agentName)}
                       </span>
                       {msg.status === "streaming" && (
                         <span
@@ -1052,7 +820,7 @@ export const MessageList = React.memo(function MessageList({
                             width: 4,
                             height: 4,
                             borderRadius: "50%",
-                            background: "rgba(255,255,255,0.7)",
+                            background: "var(--color-text-secondary)",
                             display: "inline-block",
                             animation: "pulse 1.5s ease-in-out infinite",
                           }}

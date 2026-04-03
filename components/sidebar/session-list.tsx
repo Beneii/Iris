@@ -1,12 +1,22 @@
 "use client"
 
 import * as React from "react"
-import { Plus, X, Settings, Hash } from "lucide-react"
+import { Plus, Settings, Hash } from "lucide-react"
 import { IrisLogo } from "@/components/iris-logo"
 import { HOME_SESSION_ID, type SessionInfo, type ConnectionState } from "@/hooks/use-hermes-bridge"
+import { DEFAULT_AGENTS, AgentIcon, type PantheonAgent } from "@/components/panels/pantheon-panel"
 import { hapticLight, hapticMedium } from "@/lib/haptics"
 
 /* ─── Props ─── */
+export type ChannelInfo = {
+  id: string
+  name: string
+  status: string
+  project_id?: string
+  created_at?: number
+  agent_ids?: string[]
+}
+
 interface SessionSidebarProps {
   sessionsList: SessionInfo[]
   activeSessionId: string
@@ -21,6 +31,7 @@ interface SessionSidebarProps {
   onSidebarClose: () => void
   unreadSessions?: Set<string>
   isProcessing?: boolean
+  channels?: ChannelInfo[]
 }
 
 /* ─── Helpers ─── */
@@ -33,6 +44,37 @@ function relativeTime(ts: number): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
   if (diff < 172800) return "Yesterday"
   return `${Math.floor(diff / 86400)}d ago`
+}
+
+/* ─── Shared row style ─── */
+const rowStyle = (isActive: boolean): React.CSSProperties => ({
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "7px 10px",
+  borderRadius: 8,
+  background: isActive ? "var(--color-active-bg)" : "transparent",
+  border: "none",
+  cursor: isActive ? "default" : "pointer",
+  textAlign: "left" as const,
+  marginBottom: 1,
+})
+
+/* ─── Section header ─── */
+function SectionHeader({ children, first }: { children: React.ReactNode; first?: boolean }) {
+  return (
+    <div style={{
+      fontSize: 10,
+      fontWeight: 600,
+      textTransform: "uppercase" as const,
+      letterSpacing: "0.05em",
+      color: "var(--color-text-muted)",
+      padding: first ? "4px 10px 6px" : "14px 10px 6px",
+    }}>
+      {children}
+    </div>
+  )
 }
 
 /* ─── Component ─── */
@@ -50,7 +92,25 @@ export default function SessionSidebar({
   onSidebarClose,
   unreadSessions,
   isProcessing,
+  channels,
 }: SessionSidebarProps) {
+
+  const activeChannels = React.useMemo(() =>
+    (channels || []).filter(c => c.status === "active"),
+    [channels]
+  )
+  const archivedChannels = React.useMemo(() =>
+    (channels || []).filter(c => c.status === "archived"),
+    [channels]
+  )
+  const [showArchived, setShowArchived] = React.useState(false)
+
+  const navigate = (id: string) => {
+    hapticLight()
+    resumeSession(id)
+    if (isMobile) onSidebarClose()
+  }
+
   return (
     <>
       {/* Mobile backdrop */}
@@ -60,7 +120,7 @@ export default function SessionSidebar({
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.6)",
+            background: "var(--color-overlay-backdrop)",
             zIndex: 40,
             opacity: sidebarOpen ? 1 : 0,
             pointerEvents: sidebarOpen ? "auto" : "none",
@@ -71,7 +131,7 @@ export default function SessionSidebar({
 
       {/* Sidebar */}
       <aside
-        className="flex flex-col flex-shrink-0"
+        className="flex flex-col flex-shrink-0 panel-surface"
         style={{
           width: 240,
           height: "100%",
@@ -104,11 +164,11 @@ export default function SessionSidebar({
             className="new-session-btn"
             style={{
               background: "transparent",
-              border: "1px solid rgba(255,255,255,0.04)",
+              border: "1px solid var(--color-button-bg)",
               borderRadius: 6,
               cursor: "pointer",
               padding: 5,
-              color: "rgba(255,255,255,0.3)",
+              color: "var(--color-text-tertiary)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -120,203 +180,138 @@ export default function SessionSidebar({
           </button>
         </div>
 
-        {/* ─── Session List ─── */}
+        {/* ─── Scrollable list ─── */}
         <div className="flex-1 overflow-y-auto px-2">
-          {/* ─── Channels ─── */}
-          <div style={{
-            fontSize: 10,
-            fontWeight: 600,
-            textTransform: "uppercase" as const,
-            letterSpacing: "0.05em",
-            color: "rgba(255,255,255,0.2)",
-            padding: "4px 12px 4px",
-            marginBottom: 2,
-          }}>
-            Channels
-          </div>
-          {(() => {
-            const homeSession = sessionsList.find((s) => s.id === HOME_SESSION_ID)
-            if (!homeSession) return null
-            const isActive = homeSession.id === activeSessionId
-            const isUnread = !isActive && unreadSessions?.has(homeSession.id)
+
+          {/* ═══ Direct Messages ═══ */}
+          <SectionHeader first>Direct Messages</SectionHeader>
+
+          {DEFAULT_AGENTS.map(agent => {
+            const sessionId = agent.id === "hermes" ? HOME_SESSION_ID : agent.id
+            const isActive = activeSessionId === sessionId
+            const isUnread = !isActive && unreadSessions?.has(sessionId)
+            const isAgentProcessing = isProcessing && activeSessionId === sessionId
+
             return (
               <button
-                key="home"
-                onClick={() => {
-                  if (!isActive) {
-                    hapticLight()
-                    resumeSession(homeSession.id)
-                    if (isMobile) onSidebarClose()
-                  }
-                }}
-                className={`session-row flex items-center gap-2 ${isActive ? "active-session" : ""}`}
-                style={{
-                  width: "100%",
-                  padding: "6px 12px",
-                  borderRadius: 8,
-                  background: isActive ? "var(--color-active-bg)" : "transparent",
-                  border: "none",
-                  cursor: isActive ? "default" : "pointer",
-                  textAlign: "left" as const,
-                  marginBottom: 2,
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) e.currentTarget.style.background = "rgba(255,255,255,0.03)"
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) e.currentTarget.style.background = "transparent"
-                }}
+                key={agent.id}
+                onClick={() => !isActive && navigate(sessionId)}
+                className="session-row"
+                style={rowStyle(isActive)}
+                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--color-hover-bg)" }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = isActive ? "var(--color-active-bg)" : "transparent" }}
               >
-                <Hash size={14} strokeWidth={1.8} style={{
-                  color: isActive ? "rgba(255,255,255,0.5)" : isUnread ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.2)",
-                  flexShrink: 0,
-                }} />
+                {/* Agent SVG icon */}
+                <AgentIcon agent={agent} size={8} />
+
+                {/* Name */}
                 <span style={{
                   fontSize: 13,
-                  fontWeight: isUnread ? 600 : 500,
-                  color: isActive ? "rgba(255,255,255,0.85)" : isUnread ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.5)",
+                  fontWeight: isUnread ? 600 : isActive ? 500 : 400,
+                  color: isActive ? "var(--color-text-primary)" : isUnread ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+                  flex: 1,
                 }}>
-                  general
+                  {agent.name}
                 </span>
-                {isUnread && (
-                  <span style={{
-                    width: 6, height: 6, borderRadius: "50%",
-                    background: "#5BA4F6", flexShrink: 0,
-                    marginLeft: "auto",
-                  }} />
-                )}
+
+                {/* Status indicators */}
+                {isUnread ? (
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-iris-blue)", flexShrink: 0 }} />
+                ) : isAgentProcessing ? (
+                  <span className="dot-running" style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--color-status-success)", flexShrink: 0 }} />
+                ) : null}
+              </button>
+            )
+          })}
+
+          {/* ═══ Channels ═══ */}
+          <SectionHeader>Channels</SectionHeader>
+
+          {activeChannels.map(ch => {
+            const isActive = activeSessionId === ch.id
+            const isUnread = !isActive && unreadSessions?.has(ch.id)
+            return (
+              <button
+                key={ch.id}
+                onClick={() => !isActive && navigate(ch.id)}
+                className="session-row"
+                style={rowStyle(isActive)}
+                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--color-hover-bg)" }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = isActive ? "var(--color-active-bg)" : "transparent" }}
+              >
+                <Hash size={14} strokeWidth={1.8} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
+                <span style={{
+                  fontSize: 13,
+                  fontWeight: isUnread ? 600 : isActive ? 500 : 400,
+                  color: isActive ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+                  flex: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}>
+                  {ch.name}
+                </span>
+                {isUnread && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-iris-blue)", flexShrink: 0 }} />}
+              </button>
+            )
+          })}
+
+          {/* Fallback: show general if no channels loaded yet */}
+          {activeChannels.length === 0 && (() => {
+            const isActive = activeSessionId === "general"
+            return (
+              <button onClick={() => navigate("general")} className="session-row" style={rowStyle(isActive)}>
+                <Hash size={14} strokeWidth={1.8} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
+                <span style={{ fontSize: 13, color: isActive ? "var(--color-text-primary)" : "var(--color-text-tertiary)", flex: 1 }}>general</span>
               </button>
             )
           })()}
 
-          {/* ─── Sessions ─── */}
-          <div style={{
-            fontSize: 10,
-            fontWeight: 600,
-            textTransform: "uppercase" as const,
-            letterSpacing: "0.05em",
-            color: "rgba(255,255,255,0.2)",
-            padding: "10px 12px 4px",
-            marginBottom: 2,
-          }}>
-            Sessions
-          </div>
-
-          {/* Regular sessions — exclude home */}
-          {sessionsList.filter((s) => s.id !== HOME_SESSION_ID).map((s) => {
-            const isActive = s.id === activeSessionId
-            const isUnread = !isActive && unreadSessions?.has(s.id)
-            const label = s.title || (s.preview ? s.preview.slice(0, 30) : "Untitled")
-
-            return (
-              <div
-                key={s.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (!isActive) {
-                    hapticLight()
-                    resumeSession(s.id)
-                    if (isMobile) onSidebarClose()
-                  }
-                }}
-                className={`session-row flex items-center gap-3 ${isActive ? "active-session" : ""}`}
+          {/* ═══ Archived ═══ */}
+          {archivedChannels.length > 0 && (
+            <>
+              <button
+                onClick={() => setShowArchived(!showArchived)}
                 style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  borderRadius: 8,
-                  background: isActive ? "var(--color-active-bg)" : "transparent",
-                  border: "none",
-                  cursor: isActive ? "default" : "pointer",
-                  textAlign: "left" as const,
-                  marginBottom: 2,
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) e.currentTarget.style.background = "rgba(255,255,255,0.03)"
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) e.currentTarget.style.background = "transparent"
+                  background: "transparent", border: "none", cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 4,
+                  padding: "8px 16px 4px", width: "100%",
                 }}
               >
-                {/* Unread dot */}
-                {isUnread && (
-                  <span style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background: "#5BA4F6",
-                    flexShrink: 0,
-                  }} />
-                )}
-                {/* Content */}
-                <div className="min-w-0 flex-1">
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: isUnread ? 600 : 500,
-                      color: isActive
-                        ? "rgba(255,255,255,0.85)"
-                        : isUnread
-                          ? "rgba(255,255,255,0.9)"
-                          : "rgba(255,255,255,0.5)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap" as const,
-                    }}
+                <span style={{
+                  fontSize: 10, fontWeight: 600, textTransform: "uppercase",
+                  letterSpacing: "0.05em", color: "var(--color-text-quaternary)",
+                }}>
+                  Archived ({archivedChannels.length})
+                </span>
+                <span style={{
+                  fontSize: 8, color: "var(--color-text-quaternary)",
+                  transform: showArchived ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 150ms ease",
+                }}>
+                  ▼
+                </span>
+              </button>
+              {showArchived && archivedChannels.map(ch => {
+                const isActive = activeSessionId === ch.id
+                return (
+                  <button
+                    key={ch.id}
+                    onClick={() => navigate(ch.id)}
+                    className="session-row"
+                    style={{ ...rowStyle(isActive), opacity: 0.5 }}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8" }}
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = isActive ? "1" : "0.5" }}
                   >
-                    {label}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "rgba(255,255,255,0.2)",
-                      display: "flex",
-                      gap: 6,
-                    }}
-                  >
-                    {s.message_count > 0 && <span>{s.message_count} msgs</span>}
-                    {s.last_active > 0 && <span>{relativeTime(s.last_active)}</span>}
-                  </div>
-                </div>
-
-                {/* Delete button */}
-                <button
-                  aria-label={`Delete session ${label}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    hapticMedium()
-                    deleteSession(s.id)
-                  }}
-                  style={{
-                    opacity: 0.15,
-                    cursor: "pointer",
-                    padding: 8,
-                    margin: -8,
-                    flexShrink: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "rgba(255,255,255,0.6)",
-                    transition: "opacity 150ms ease, color 150ms ease",
-                    background: "transparent",
-                    border: "none",
-                    minWidth: 36,
-                    minHeight: 36,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.opacity = "1"
-                    e.currentTarget.style.color = "rgba(239,68,68,0.7)"
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.opacity = "0.15"
-                    e.currentTarget.style.color = "rgba(255,255,255,0.6)"
-                  }}
-                >
-                  <X size={12} strokeWidth={2} />
-                </button>
-              </div>
-            )
-          })}
+                    <Hash size={14} strokeWidth={1.8} style={{ color: "var(--color-text-quaternary)", flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: "var(--color-text-quaternary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {ch.name}
+                    </span>
+                  </button>
+                )
+              })}
+            </>
+          )}
         </div>
 
         {/* ─── Footer ─── */}
@@ -333,14 +328,14 @@ export default function SessionSidebar({
                 borderRadius: "50%",
                 background:
                   connectionState === "connected"
-                    ? "#34C759"
+                    ? "var(--color-status-success)"
                     : connectionState === "connecting"
-                      ? "#F59E0B"
-                      : "#EF4444",
+                      ? "var(--color-status-warning)"
+                      : "var(--color-status-error)",
                 flexShrink: 0,
               }}
             />
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)" }}>
+            <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
               {model || "\u2014"}
             </span>
           </div>
@@ -356,17 +351,13 @@ export default function SessionSidebar({
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "rgba(255,255,255,0.2)",
+              color: "var(--color-text-muted)",
               transition: "color 150ms ease",
               minWidth: 44,
               minHeight: 44,
             }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = "rgba(255,255,255,0.5)"
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = "rgba(255,255,255,0.2)"
-            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--color-text-secondary)" }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--color-text-muted)" }}
           >
             <Settings size={16} strokeWidth={1.5} />
           </button>

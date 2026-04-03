@@ -36,7 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
 # ─── Hermes path & adapter ───
-HERMES_DIR = Path("/tmp/hermes-agent")
+HERMES_DIR = Path.home() / "hermes-agent"
 sys.path.insert(0, str(HERMES_DIR))
 
 from hermes_adapter import HermesAdapter, get_config, get_agent_name, get_soul_content, get_memory, list_skills, get_available_toolsets, set_config_value, list_jobs, create_job, pause_job, resume_job, trigger_job, remove_job, get_job_outputs, resolve_profile_for_session
@@ -70,6 +70,103 @@ cancel_flags: dict[str, bool] = {}
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _start_time = time.time()
 _RESTART_SOCKET_PATH = "/tmp/iris-profile-restart.sock"
+
+# ─── Agent Job Queues ───
+import queue as _queue_mod
+from dataclasses import dataclass, field, asdict
+
+@dataclass
+class AgentJob:
+    job_id: str
+    profile: str
+    session_id: str
+    message: str
+    kind: str  # "dm" | "channel"
+    channel_id: Optional[str] = None
+    images: Optional[list] = None
+    attachments: Optional[list] = None
+    submitted_at: float = field(default_factory=time.time)
+    status: str = "queued"  # queued | running | done | error
+
+agent_queues: dict[str, _queue_mod.Queue] = {}
+agent_queue_workers: dict[str, threading.Thread] = {}
+agent_current_job: dict[str, Optional[AgentJob]] = {}
+_job_counter: int = 0
+
+def _next_job_id() -> str:
+    global _job_counter
+    _job_counter += 1
+    return f"job-{int(time.time())}-{_job_counter}"
+
+def _broadcast_queue_status():
+    """Emit current queue depths to all clients."""
+    status = {}
+    for profile in ("hermes", "talos", "icarus", "charon", "nyx"):
+        q = agent_queues.get(profile)
+        current = agent_current_job.get(profile)
+        status[profile] = {
+            "depth": q.qsize() if q else 0,
+            "current_job_id": current.job_id if current else None,
+            "current_session_id": current.session_id if current else None,
+        }
+    emit("queue.status", {"queues": status})
+
+def _agent_queue_worker(profile: str):
+    """Persistent thread per agent that drains its job queue sequentially."""
+    q = agent_queues[profile]
+    while True:
+        job = q.get()  # blocks until job available
+        agent_current_job[profile] = job
+        job.status = "running"
+        emit("queue.job_started", {
+            "profile": profile,
+            "job_id": job.job_id,
+            "session_id": job.session_id,
+        })
+        _broadcast_queue_status()
+        try:
+            if job.kind == "channel":
+                _run_channel_agent(job.channel_id, job.message, profile)
+            else:
+                run_agent_sync(job.session_id, job.message, job.images, job.attachments)
+            job.status = "done"
+        except Exception as e:
+            job.status = "error"
+            print(f"[iris-bridge] Queue worker error ({profile}): {e}", flush=True)
+        finally:
+            agent_current_job[profile] = None
+            _broadcast_queue_status()
+            q.task_done()
+
+def _init_agent_queues():
+    """Initialize queues and worker threads for all profiles."""
+    for profile in ("hermes", "talos", "icarus", "charon", "nyx"):
+        agent_queues[profile] = _queue_mod.Queue()
+        agent_current_job[profile] = None
+        t = threading.Thread(
+            target=_agent_queue_worker,
+            args=(profile,),
+            daemon=True,
+            name=f"queue-{profile}",
+        )
+        agent_queue_workers[profile] = t
+        t.start()
+
+# ─── Session Roster (which agents participated in each session) ───
+session_roster: dict[str, set[str]] = {}  # session_id -> set of agent IDs
+
+def _add_to_roster(session_id: str, agent_id: str):
+    """Track that an agent participated in a session."""
+    if session_id not in session_roster:
+        session_roster[session_id] = set()
+    session_roster[session_id].add(agent_id)
+    emit("session.roster", {
+        "session_id": session_id,
+        "agents": list(session_roster[session_id]),
+    })
+
+def _get_roster(session_id: str) -> list[str]:
+    return list(session_roster.get(session_id, []))
 
 # ─── Activity persistence ───
 ACTIVITY_DIR = hermes_home / "iris_activity"
@@ -133,6 +230,79 @@ NOTIFICATION_DIR.mkdir(parents=True, exist_ok=True)
 
 CHANNELS_DIR = hermes_home / "iris_channels"
 CHANNELS_DIR.mkdir(parents=True, exist_ok=True)
+
+CHANNEL_META_PATH = CHANNELS_DIR / "_meta.json"
+
+def _load_channel_meta() -> dict[str, dict]:
+    """Load channel metadata (name, status, project_id, created_at, agent_ids)."""
+    if CHANNEL_META_PATH.exists():
+        try:
+            return json.loads(CHANNEL_META_PATH.read_text())
+        except Exception:
+            pass
+    # Bootstrap: scan existing channel JSON files + ensure general exists
+    meta: dict[str, dict] = {}
+    for f in CHANNELS_DIR.glob("*.json"):
+        if f.name.startswith("_"):
+            continue
+        cid = f.stem
+        meta[cid] = {"name": cid, "status": "active", "created_at": f.stat().st_mtime, "agent_ids": ["hermes"]}
+    if "general" not in meta:
+        meta["general"] = {"name": "general", "status": "active", "created_at": time.time(), "agent_ids": ["hermes"]}
+    _save_channel_meta(meta)
+    return meta
+
+def _save_channel_meta(meta: dict[str, dict]):
+    tmp = CHANNEL_META_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(meta, indent=2, default=str))
+    tmp.replace(CHANNEL_META_PATH)
+
+def _create_channel(channel_id: str, name: str = "", project_id: str = "", agent_ids: list[str] | None = None) -> dict:
+    meta = _load_channel_meta()
+    valid_agents = [a for a in (agent_ids or ["hermes"]) if a in PROFILE_NAMES]
+    entry = {
+        "name": name or channel_id,
+        "status": "active",
+        "project_id": project_id,
+        "created_at": time.time(),
+        "agent_ids": valid_agents or ["hermes"],
+    }
+    meta[channel_id] = entry
+    _save_channel_meta(meta)
+    _ensure_public_channel_session(channel_id)
+    return {"id": channel_id, **entry}
+
+def _archive_channel(channel_id: str) -> bool:
+    meta = _load_channel_meta()
+    if channel_id in meta:
+        meta[channel_id]["status"] = "archived"
+        meta[channel_id]["archived_at"] = time.time()
+        _save_channel_meta(meta)
+        return True
+    return False
+
+def _unarchive_channel(channel_id: str) -> bool:
+    meta = _load_channel_meta()
+    if channel_id in meta:
+        meta[channel_id]["status"] = "active"
+        meta[channel_id].pop("archived_at", None)
+        _save_channel_meta(meta)
+        return True
+    return False
+
+def _list_channels() -> list[dict]:
+    meta = _load_channel_meta()
+    result = []
+    for cid, info in meta.items():
+        result.append({"id": cid, **info})
+    return result
+
+
+def _channel_agent_ids(channel_id: str) -> list[str]:
+    meta = _load_channel_meta()
+    info = meta.get(channel_id, {})
+    ids = info.get("agent_ids") or ["hermes"]
+    return [a for a in ids if a in PROFILE_NAMES] or ["hermes"]
 
 session_activities: dict[str, list] = {}
 channel_private_histories: dict[str, list] = {}
@@ -224,15 +394,24 @@ def _run_channel_agent(channel_id: str, prompt_text: str, agent_id: str) -> None
             f"You are participating in shared channel #{channel_id}.\n"
             f"Recent public channel transcript:\n{public_context or '[empty]'}\n\n"
             f"Latest addressed message:\n{prompt_text}\n\n"
-            f"Reply directly into the shared channel as {agent_id}. Keep your own identity."
+            f"Reply directly. Do NOT prefix your response with your name or any label — "
+            f"the UI already shows who you are. Just respond naturally."
         )
+
+        def channel_emit(event_type: str, data: dict):
+            """Proxy emit that rewrites session_id to the public channel so events show in the right chat."""
+            patched = {**data, "session_id": channel_id, "agentId": agent_id}
+            emit(event_type, patched)
+
+        # Emit response.started so frontend creates a streaming placeholder
+        emit("response.started", {"session_id": channel_id, "agentId": agent_id})
 
         result = runtime_manager.run(
             profile=agent_id,
             session_id=private_session_id,
             message=channel_prompt,
             history=channel_private_histories.get(private_session_id, []),
-            emit=lambda _event_type, _data: None,
+            emit=channel_emit,
             images=None,
             attachments=None,
         )
@@ -242,19 +421,46 @@ def _run_channel_agent(channel_id: str, prompt_text: str, agent_id: str) -> None
 
         response = result.get("final_response", "") if result else ""
         if not response:
+            emit("response.completed", {"session_id": channel_id, "final_response": "", "agentId": agent_id})
             return
         response = _process_media_refs(response, channel_id)
         _append_channel_message(channel_id, "assistant", response, agent_id)
+        _add_to_roster(channel_id, agent_id)
         try:
             session_db.append_message(channel_id, "assistant", content=response)
         except Exception:
             pass
-        emit("hermes.message", {
+
+        # Emit response.completed so frontend finalizes the streaming message
+        emit("response.completed", {
             "session_id": channel_id,
-            "text": response,
+            "final_response": response,
             "agentId": agent_id,
-            "timestamp": time.time(),
+            "api_calls": result.get("api_calls", 0) if result else 0,
         })
+
+        # Agent-to-agent routing: if response mentions other agents, enqueue follow-ups
+        mentioned_agents, stripped = _extract_agent_mentions(response)
+        for target_agent in mentioned_agents:
+            if target_agent != agent_id:
+                followup = AgentJob(
+                    job_id=_next_job_id(),
+                    profile=target_agent,
+                    session_id=channel_id,
+                    message=f"[{agent_id} said]: {response}",
+                    kind="channel",
+                    channel_id=channel_id,
+                )
+                q = agent_queues.get(target_agent)
+                if q:
+                    q.put(followup)
+                    emit("queue.job_queued", {
+                        "profile": target_agent,
+                        "job_id": followup.job_id,
+                        "session_id": channel_id,
+                        "position": q.qsize(),
+                        "delegated_from": agent_id,
+                    })
     except Exception as e:
         print(f"[iris-bridge] channel agent error ({agent_id} in {channel_id}): {e}", flush=True)
 
@@ -496,9 +702,21 @@ def run_agent_sync(session_id: str, message: str, images: list = None, attachmen
         cancel_flags[session_id] = False
         emit("response.started", {"session_id": session_id, "agentId": profile})
 
+        # Inject project context if session is part of a project
+        effective_message = message
+        try:
+            from projects import find_project_for_session, get_project_context
+            project = find_project_for_session(session_id)
+            if project:
+                ctx = get_project_context(project["id"])
+                if ctx:
+                    effective_message = f"[Project: {project['name']}]\n{ctx}\n\n{message}"
+        except Exception:
+            pass
+
         result = runtime.run(
             session_id=session_id,
-            message=message,
+            message=effective_message,
             history=sessions.get(session_id, {}).get("history", []),
             emit=emit,
             images=images,
@@ -528,12 +746,38 @@ def run_agent_sync(session_id: str, message: str, images: list = None, attachmen
 
         _save_activities(session_id)
 
+        _add_to_roster(session_id, profile)
+
         emit("response.completed", {
             "session_id": session_id,
             "final_response": final_response,
             "api_calls": result.get("api_calls", 0) if result else 0,
             "agentId": profile,
         })
+
+        # Agent-to-agent delegation: if response @mentions another agent, enqueue
+        if final_response:
+            mentioned_agents, _ = _extract_agent_mentions(final_response)
+            for target_agent in mentioned_agents:
+                if target_agent != profile:
+                    _add_to_roster(session_id, target_agent)
+                    followup = AgentJob(
+                        job_id=_next_job_id(),
+                        profile=target_agent,
+                        session_id=session_id,
+                        message=f"[{profile} delegated to you]: {final_response}",
+                        kind="dm",
+                    )
+                    q = agent_queues.get(target_agent)
+                    if q:
+                        q.put(followup)
+                        emit("queue.job_queued", {
+                            "profile": target_agent,
+                            "job_id": followup.job_id,
+                            "session_id": session_id,
+                            "position": q.qsize(),
+                            "delegated_from": profile,
+                        })
 
         if not clients and final_response:
             _write_desktop_notification(session_id, final_response[:200])
@@ -942,29 +1186,54 @@ async def websocket_endpoint(websocket: WebSocket):
                         "text": text,
                     })
                     mentioned_agents, stripped_prompt = _extract_agent_mentions(text)
-                    target_agents = mentioned_agents or ["hermes"]
-                    for idx, agent_id in enumerate(target_agents):
-                        thread = threading.Thread(
-                            target=_run_channel_agent,
-                            args=(session_id, stripped_prompt, agent_id),
-                            daemon=True,
+                    target_agents = mentioned_agents or _channel_agent_ids(session_id)
+                    for agent_id in target_agents:
+                        job = AgentJob(
+                            job_id=_next_job_id(),
+                            profile=agent_id,
+                            session_id=session_id,
+                            message=stripped_prompt,
+                            kind="channel",
+                            channel_id=session_id,
                         )
-                        running_threads[f"{session_id}:{agent_id}:{idx}"] = thread
-                        thread.start()
+                        q = agent_queues.get(agent_id)
+                        if q:
+                            q.put(job)
+                            emit("queue.job_queued", {
+                                "profile": agent_id,
+                                "job_id": job.job_id,
+                                "session_id": session_id,
+                                "position": q.qsize(),
+                            })
+                        else:
+                            # Fallback: unknown profile, run directly
+                            threading.Thread(target=_run_channel_agent, args=(session_id, stripped_prompt, agent_id), daemon=True).start()
                 else:
                     emit("message.user", {
                         "session_id": session_id,
                         "text": text,
                     })
-                    # Note: AIAgent persists messages via session_db internally
-                    # Don't double-persist here
-                    thread = threading.Thread(
-                        target=run_agent_sync,
-                        args=(session_id, text, images, attachments),
-                        daemon=True,
+                    profile = resolve_profile_for_session(session_id)
+                    job = AgentJob(
+                        job_id=_next_job_id(),
+                        profile=profile,
+                        session_id=session_id,
+                        message=text,
+                        kind="dm",
+                        images=images,
+                        attachments=attachments,
                     )
-                    running_threads[session_id] = thread
-                    thread.start()
+                    q = agent_queues.get(profile)
+                    if q:
+                        q.put(job)
+                        emit("queue.job_queued", {
+                            "profile": profile,
+                            "job_id": job.job_id,
+                            "session_id": session_id,
+                            "position": q.qsize(),
+                        })
+                    else:
+                        threading.Thread(target=run_agent_sync, args=(session_id, text, images, attachments), daemon=True).start()
 
             # ─── agent_post: an agent speaks in a channel as itself ───
             elif action == "agent_post":
@@ -1226,6 +1495,108 @@ async def websocket_endpoint(websocket: WebSocket):
                     "config": fresh_config,
                 })
 
+            # ─── Channels ───
+            elif action == "list_channels":
+                await websocket.send_json({"type": "channels.list", "channels": _list_channels()})
+
+            elif action == "create_channel":
+                cid = msg.get("channel_id", "").strip().lower().replace(" ", "-")
+                if not cid:
+                    cid = f"ch-{uuid.uuid4().hex[:6]}"
+                name = msg.get("name", cid)
+                project_id = msg.get("project_id", "")
+                agent_ids = msg.get("agent_ids") or []
+                ch = _create_channel(cid, name, project_id, agent_ids)
+                emit("channel.created", ch)
+                # Also link to project if specified
+                if project_id:
+                    try:
+                        from projects import link_session
+                        link_session(project_id, cid)
+                    except Exception:
+                        pass
+
+            elif action == "archive_channel":
+                cid = msg.get("channel_id", "")
+                if _archive_channel(cid):
+                    emit("channel.archived", {"channel_id": cid})
+
+            elif action == "unarchive_channel":
+                cid = msg.get("channel_id", "")
+                if _unarchive_channel(cid):
+                    emit("channel.unarchived", {"channel_id": cid})
+
+            # ─── Projects ───
+            elif action == "list_projects":
+                from projects import list_projects as _lp
+                await websocket.send_json({"type": "projects.list", "projects": _lp()})
+
+            elif action == "create_project":
+                from projects import create_project as _cp
+                p = _cp(
+                    name=msg.get("name", "Untitled"),
+                    description=msg.get("description", ""),
+                    agents=msg.get("agents"),
+                )
+                emit("project.created", p)
+                await websocket.send_json({"type": "projects.list", "projects": __import__("projects").list_projects()})
+
+            elif action == "update_project":
+                from projects import update_project as _up
+                p = _up(msg.get("project_id", ""), **{k: v for k, v in msg.items() if k not in ("action", "project_id")})
+                if p:
+                    emit("project.updated", p)
+
+            elif action == "delete_project":
+                from projects import delete_project as _dp
+                _dp(msg.get("project_id", ""))
+                emit("project.deleted", {"project_id": msg.get("project_id", "")})
+
+            elif action == "link_session_to_project":
+                from projects import link_session as _ls
+                p = _ls(msg.get("project_id", ""), msg.get("session_id", ""))
+                if p:
+                    emit("project.updated", p)
+
+            elif action == "unlink_session_from_project":
+                from projects import unlink_session as _us
+                p = _us(msg.get("project_id", ""), msg.get("session_id", ""))
+                if p:
+                    emit("project.updated", p)
+
+            elif action == "get_project_memory":
+                from projects import get_project_memory as _gpm
+                mem = _gpm(msg.get("project_id", ""))
+                await websocket.send_json({"type": "project.memory", "project_id": msg.get("project_id", ""), "memory": mem})
+
+            # ─── get_queue_status ───
+            elif action == "get_queue_status":
+                _broadcast_queue_status()
+
+            # ─── get_health ───
+            elif action == "get_health":
+                health = get_runtime_manager().health_check_all()
+                await websocket.send_json({
+                    "type": "health.state",
+                    "agents": health,
+                })
+
+            # ─── restart_agent ───
+            elif action == "restart_agent":
+                profile = msg.get("profile", "")
+                if profile in ("hermes", "talos", "icarus", "charon", "nyx"):
+                    get_runtime_manager().restart_profile(profile)
+                    emit("agent.restarted", {"profile": profile})
+
+            # ─── get_session_roster ───
+            elif action == "get_session_roster":
+                sid = msg.get("session_id", "")
+                await websocket.send_json({
+                    "type": "session.roster",
+                    "session_id": sid,
+                    "agents": _get_roster(sid),
+                })
+
             # ─── set_config ───
             elif action == "set_config":
                 key = msg.get("key", "")
@@ -1233,12 +1604,24 @@ async def websocket_endpoint(websocket: WebSocket):
                 if key and value is not None:
                     try:
                         set_config_value(key, value)
+                        # Clear cached agents so they pick up new config
+                        if key.startswith("model."):
+                            get_runtime_manager().clear_all_caches()
                         emit("config.updated", {"key": key, "value": value})
                     except Exception as e:
                         await websocket.send_json({
                             "type": "config.error",
                             "error": str(e),
                         })
+
+            # ─── list_providers ───
+            elif action == "list_providers":
+                from hermes_adapter import list_providers
+                providers = list_providers()
+                await websocket.send_json({
+                    "type": "providers.list",
+                    "providers": providers,
+                })
 
             # ─── get_skills ───
             elif action == "get_skills":
@@ -1509,6 +1892,10 @@ async def startup():
             print(f"[iris-bridge] Created persistent Home session")
     except Exception as e:
         print(f"[iris-bridge] Failed to create home session: {e}")
+
+    # Initialize agent job queues
+    _init_agent_queues()
+    print("[iris-bridge] Agent job queues initialized")
 
     # Start all profile runtimes; Nyx will supervise them via the restart RPC.
     try:

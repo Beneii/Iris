@@ -53,3 +53,4 @@ __pycache__/
 # electron debug
 electron-debug.log
 .claude/
+.claude/worktrees/busy-wiles

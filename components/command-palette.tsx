@@ -41,6 +41,10 @@ const COMMANDS: Command[] = [
   { name: "/review", description: "Code review mode", category: "SKILLS", action: "send" },
   { name: "/debug", description: "Systematic debugging", category: "SKILLS", action: "send" },
 
+  // Pantheon
+  { name: "/council", description: "All agents debate a topic", category: "PANTHEON", action: "send" },
+  { name: "/evolve", description: "Evolve a skill with GEPA", category: "PANTHEON", action: "send" },
+
   // Automation
   { name: "/agents", description: "View subagents", category: "AUTOMATION", action: "ui" },
   { name: "/mcp", description: "MCP server status", category: "AUTOMATION", action: "ui" },
@@ -48,6 +52,7 @@ const COMMANDS: Command[] = [
 ]
 
 const CATEGORY_META: Record<string, { symbol: string; icon: React.ElementType }> = {
+  PANTHEON: { symbol: "\u2726", icon: Sparkles },
   CONVERSATION: { symbol: "\u25C6", icon: MessageSquare },
   TOOLS: { symbol: "\u2699", icon: Wrench },
   SKILLS: { symbol: "\u2697", icon: Sparkles },
@@ -177,9 +182,9 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
         style={{
           background: "#1A1A1F",
           borderRadius: 12,
-          border: "1px solid rgba(255,255,255,0.08)",
+          border: "1px solid var(--color-border-subtle)",
           boxShadow:
-            "0 -4px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)",
+            "0 -4px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--color-button-bg)",
           maxHeight: 340,
           overflow: "hidden",
           display: "flex",
@@ -190,7 +195,7 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
         <div
           style={{
             padding: "10px 14px 8px",
-            borderBottom: "1px solid rgba(255,255,255,0.06)",
+            borderBottom: "1px solid var(--color-border-dim)",
             display: "flex",
             alignItems: "center",
             gap: 8,
@@ -200,7 +205,7 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
             style={{
               fontSize: 11,
               fontWeight: 500,
-              color: "rgba(255,255,255,0.3)",
+              color: "var(--color-text-tertiary)",
               textTransform: "uppercase",
               letterSpacing: "0.05em",
             }}
@@ -210,7 +215,7 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
           <span
             style={{
               fontSize: 10,
-              color: "rgba(255,255,255,0.15)",
+              color: "var(--color-text-faint)",
               marginLeft: "auto",
               fontFamily: "var(--font-mono, monospace)",
             }}
@@ -245,13 +250,13 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
                 >
                   <Icon
                     size={12}
-                    style={{ color: "rgba(255,255,255,0.25)", flexShrink: 0 }}
+                    style={{ color: "var(--color-text-ghost)", flexShrink: 0 }}
                   />
                   <span
                     style={{
                       fontSize: 10,
                       fontWeight: 600,
-                      color: "rgba(255,255,255,0.3)",
+                      color: "var(--color-text-tertiary)",
                       textTransform: "uppercase",
                       letterSpacing: "0.06em",
                     }}
@@ -281,7 +286,7 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
                         cursor: "pointer",
                         textAlign: "left",
                         background: isSelected
-                          ? "rgba(255,255,255,0.12)"
+                          ? "var(--color-text-quaternary)"
                           : "transparent",
                         transition: "background 80ms ease",
                       }}
@@ -292,8 +297,8 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
                           fontSize: 13,
                           fontWeight: 500,
                           color: isSelected
-                            ? "rgba(255,255,255,0.7)"
-                            : "rgba(255,255,255,0.88)",
+                            ? "var(--color-text-secondary)"
+                            : "var(--color-text-primary)",
                           minWidth: 90,
                           flexShrink: 0,
                         }}
@@ -304,8 +309,8 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
                         style={{
                           fontSize: 12,
                           color: isSelected
-                            ? "rgba(255,255,255,0.7)"
-                            : "rgba(255,255,255,0.55)",
+                            ? "var(--color-text-secondary)"
+                            : "var(--color-text-secondary)",
                           flex: 1,
                         }}
                       >
@@ -315,10 +320,10 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
                         <span
                           style={{
                             fontSize: 9,
-                            color: "rgba(255,255,255,0.2)",
+                            color: "var(--color-text-muted)",
                             fontFamily: "var(--font-mono, monospace)",
                             padding: "1px 5px",
-                            border: "1px solid rgba(255,255,255,0.06)",
+                            border: "1px solid var(--color-border-dim)",
                             borderRadius: 4,
                             flexShrink: 0,
                           }}
@@ -338,7 +343,7 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
         <div
           style={{
             padding: "6px 14px",
-            borderTop: "1px solid rgba(255,255,255,0.06)",
+            borderTop: "1px solid var(--color-border-dim)",
             display: "flex",
             alignItems: "center",
             gap: 12,
@@ -363,7 +368,7 @@ export function CommandPalette({ query, onSelect, onClose, visible }: CommandPal
 
 const hintStyle: React.CSSProperties = {
   fontSize: 10,
-  color: "rgba(255,255,255,0.2)",
+  color: "var(--color-text-muted)",
   display: "flex",
   alignItems: "center",
   gap: 4,
@@ -377,8 +382,8 @@ function Kbd({ children }: { children: React.ReactNode }) {
         fontSize: 9,
         padding: "1px 4px",
         borderRadius: 3,
-        background: "rgba(255,255,255,0.06)",
-        color: "rgba(255,255,255,0.3)",
+        background: "var(--color-border-dim)",
+        color: "var(--color-text-tertiary)",
       }}
     >
       {children}

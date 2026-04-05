@@ -185,6 +185,7 @@ async function createWindow() {
     log("[iris] URL loaded successfully")
     mainWindow.show()
     mainWindow.focus()
+    if (IS_DEV) mainWindow.webContents.openDevTools({ mode: "detach" })
   }).catch((err) => {
     log("[iris] ERROR: Failed to load URL:", err.message)
     mainWindow.show()

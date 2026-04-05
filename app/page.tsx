@@ -7,26 +7,26 @@ import { IrisLogo } from "@/components/iris-logo"
 import MessageEntry, { ApprovalInline, MessageList } from "@/components/chat/message-entry"
 import Composer from "@/components/chat/composer"
 import { CommandPalette, type Command } from "@/components/command-palette"
+import { MentionPicker } from "@/components/chat/mention-picker"
+import { MentionClickProvider } from "@/lib/markdown-components"
 import SessionSidebar from "@/components/sidebar/session-list"
 import SettingsModal from "@/components/panels/settings-panel"
-import PantheonPanel from "@/components/panels/pantheon-panel"
-import { hapticLight, hapticMedium, hapticSuccess, hapticError } from "@/lib/haptics"
+import { ChatHeader } from "@/components/chat/chat-header"
+import { OfflineBanner } from "@/components/chat/offline-banner"
+import PantheonPanel, { AgentPopout, DEFAULT_AGENTS, type PantheonAgent } from "@/components/panels/pantheon-panel"
+import { EmptyState } from "@/components/chat/empty-state"
+import { MobileDrawer } from "@/components/panels/mobile-drawer"
+import { hapticLight, hapticMedium } from "@/lib/haptics"
 import { useKeyboardLayout } from "@/hooks/use-keyboard-layout"
+import { useMediaQuery } from "@/hooks/use-media-query"
+import { useAutoScroll } from "@/hooks/use-auto-scroll"
+import { useSwipeGesture } from "@/hooks/use-swipe-gesture"
+import { useHapticFeedback } from "@/hooks/use-haptic-feedback"
 
-/* ─── Responsive hook ─── */
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = React.useState(false)
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const mql = window.matchMedia(query)
-    setMatches(mql.matches)
-    const handler = (e: MediaQueryListEvent) => setMatches(e.matches)
-    mql.addEventListener("change", handler)
-    return () => mql.removeEventListener("change", handler)
-  }, [query])
-  return matches
-}
 
+/* ─── Static lookups (outside render) ─── */
+const _AGENT_IDS = new Set(DEFAULT_AGENTS.map(a => a.id))
+const _HERMES_AGENT = DEFAULT_AGENTS.find(a => a.id === "hermes")!
 
 /* ─── Main Page ─── */
 export default function HomePage() {
@@ -37,6 +37,23 @@ export default function HomePage() {
     model,
     provider,
     agentName,
+    agentsData,
+    providersData,
+    queueStatus,
+    sessionRoster,
+    channelsList,
+    restartAgent,
+    evolutionStatus,
+    sendAction,
+    projectsList,
+    requestProjects,
+    createProject,
+    updateProject: updateProjectAction,
+    deleteProject: deleteProjectAction,
+    linkSession: linkSessionAction,
+    unlinkSession: unlinkSessionAction,
+    requestAgents,
+    requestProviders,
     memoryData,
     configData,
     contextPressure,
@@ -55,6 +72,8 @@ export default function HomePage() {
     setConfig,
     sessionsList,
     activeSessionId,
+    activeTarget,
+    navigateTo,
     resumeSession,
     deleteSession,
     jobsList,
@@ -79,76 +98,58 @@ export default function HomePage() {
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [settingsTab, setSettingsTab] = React.useState<string>("settings")
   const [showCommandPalette, setShowCommandPalette] = React.useState(false)
+  const [showMentionPicker, setShowMentionPicker] = React.useState(false)
   const [attachments, setAttachments] = React.useState<{ name: string; type: string; url: string }[]>([])
-  const scrollRef = React.useRef<HTMLDivElement>(null)
+  const [popoutAgent, setPopoutAgent] = React.useState<PantheonAgent | null>(null)
 
   const isMobile = useMediaQuery("(max-width: 767px)")
   const isCompact = useMediaQuery("(max-width: 1023px)")
   useKeyboardLayout()
 
-  // ─── Mobile swipe gestures: right→open sidebar, left→open agents ───
-  const swipeRef = React.useRef<{ startX: number; startY: number } | null>(null)
-  const [agentPanelOpen, setAgentPanelOpen] = React.useState(false)
+  const { scrollRef, handleScroll, scrollToBottom, showScrollDown, resetScroll } = useAutoScroll(messages, isProcessing)
+  const { agentPanelOpen, setAgentPanelOpen, handleSwipeStart, handleSwipeEnd } = useSwipeGesture(isMobile, sidebarOpen, setSidebarOpen)
+  useHapticFeedback(messages)
 
-  const handleSwipeStart = React.useCallback((e: React.TouchEvent) => {
-    swipeRef.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY }
-  }, [])
-
-  const handleSwipeEnd = React.useCallback((e: React.TouchEvent) => {
-    if (!swipeRef.current || !isMobile) return
-    const dx = e.changedTouches[0].clientX - swipeRef.current.startX
-    const dy = Math.abs(e.changedTouches[0].clientY - swipeRef.current.startY)
-    swipeRef.current = null
-    if (dy > 80 || Math.abs(dx) < 60) return // too vertical or too short
-
-    if (dx > 0) {
-      // Swipe right
-      if (agentPanelOpen) setAgentPanelOpen(false)
-      else setSidebarOpen(true)
-    } else {
-      // Swipe left
-      if (sidebarOpen) setSidebarOpen(false)
-      else setAgentPanelOpen(true)
-    }
-  }, [isMobile, sidebarOpen, agentPanelOpen])
-
-  // Auto-scroll only if user is near the bottom (within 150px)
-  const isNearBottomRef = React.useRef(true)
-  const [showScrollDown, setShowScrollDown] = React.useState(false)
-
-  const handleScroll = React.useCallback(() => {
-    if (!scrollRef.current) return
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
-    const nearBottom = scrollHeight - scrollTop - clientHeight < 80
-    isNearBottomRef.current = nearBottom
-    setShowScrollDown(!nearBottom && scrollHeight > clientHeight + 300)
-  }, [])
-
-  const scrollToBottom = React.useCallback(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
-      setShowScrollDown(false)
-    }
-  }, [])
-
+  // ─── Keyboard Shortcuts ───
   React.useEffect(() => {
-    if (scrollRef.current && isNearBottomRef.current) {
-      requestAnimationFrame(() => {
-        scrollRef.current?.scrollTo({ top: scrollRef.current!.scrollHeight, behavior: "smooth" })
-      })
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey
+      if (meta && e.key === "k") { e.preventDefault(); setShowCommandPalette(true); setComposerValue("/") }
+      if (meta && e.key === "n") { e.preventDefault(); hapticLight(); newSession() }
+      if (meta && e.key === ",") { e.preventDefault(); setSettingsOpen(true) }
+      if (meta && e.key === "b") { e.preventDefault(); setSidebarVisible(v => !v) }
+      if (meta && e.key === ".") { e.preventDefault(); setPantheonVisible(v => !v) }
+      // Cmd+1-5 to switch agents
+      if (meta && e.key >= "1" && e.key <= "5") {
+        e.preventDefault()
+        const agents = ["hermes", "talos", "icarus", "charon", "nyx"]
+        const idx = parseInt(e.key) - 1
+        if (agents[idx]) navigateTo({ kind: "dm", agentId: agents[idx] })
+      }
     }
-  }, [messages])
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [newSession, navigateTo])
 
-  // Haptic feedback when agent finishes responding
-  const prevLastMessageStatusRef = React.useRef<string | undefined>(undefined)
-  React.useEffect(() => {
-    const last = messages[messages.length - 1]
-    if (!last || last.role !== "assistant") return
-    const prev = prevLastMessageStatusRef.current
-    prevLastMessageStatusRef.current = last.status
-    if (prev === "streaming" && last.status === "ready") hapticSuccess()
-    if (last.status === "error" && prev !== "error") hapticError()
-  }, [messages])
+  // ─── Target Logic ───
+  const isDM = activeSessionId === HOME_SESSION_ID || _AGENT_IDS.has(activeSessionId)
+  const currentAgent = isDM
+    ? (activeSessionId === HOME_SESSION_ID ? _HERMES_AGENT : DEFAULT_AGENTS.find(a => a.id === activeSessionId) || null)
+    : null
+  const isArchiveChannel = activeSessionId === "archive"
+
+  const targetName = currentAgent ? currentAgent.name : isArchiveChannel ? "archive" : activeSessionId || "general"
+  const channelColor = currentAgent ? currentAgent.color : "var(--color-text-tertiary)"
+
+  // Compute agent roster: for DMs show that agent, for channels use channel's agent_ids
+  const effectiveRoster = React.useMemo(() => {
+    if (isDM && currentAgent) return [currentAgent.id]
+    // Find channel agent_ids from channelsList
+    const ch = channelsList.find(c => c.id === activeSessionId)
+    if (ch?.agent_ids && ch.agent_ids.length > 0) return ch.agent_ids
+    // No explicit agent_ids = open channel, show all agents
+    return []
+  }, [isDM, currentAgent, channelsList, activeSessionId])
 
   const handleSend = async () => {
     if (!composerValue.trim() && attachments.length === 0) return
@@ -156,7 +157,6 @@ export default function HomePage() {
     const text = composerValue.trim()
 
     if (attachments.length > 0) {
-      // Convert blob URLs to base64
       const encoded = await Promise.all(
         attachments.map(async (att) => {
           try {
@@ -173,28 +173,43 @@ export default function HomePage() {
           }
         })
       )
-      // Convert data URLs to the format the bridge expects: {data: "raw_base64", mime: "image/png"}
       const imageAttachments = encoded.filter(a => a.data && a.type.startsWith("image/"))
       const images = imageAttachments.map(a => {
         const raw = a.data.includes(",") ? a.data.split(",")[1] : a.data
         return { data: raw, mime: a.type }
       })
-      // Keep the full data URLs for display in chat (stable, no blob expiry issues)
       const displayImages = imageAttachments.map(a => a.data)
 
       sendMessageWithAttachments(text || "What do you see in this image?", images, displayImages)
+    } else if (text.startsWith("/evolve")) {
+      const parts = text.replace("/evolve", "").trim().split(" ")
+      const type = parts[0] || "skill"  // skill, soul, tool, prompt
+      const target = parts.slice(1).join(" ") || "general"
+      if (type === "soul") {
+        sendAction("evolve_soul", { profile: target, iterations: 5 })
+      } else if (type === "tool") {
+        sendAction("evolve_tool", { tool: target, iterations: 5 })
+      } else if (type === "prompt") {
+        sendAction("evolve_prompt", { file: target, iterations: 5 })
+      } else {
+        sendAction("evolve_skill", { skill: type === "skill" ? target : type, iterations: 5 })
+      }
+    } else if (text.startsWith("/council")) {
+      // Parse: /council [turns] [subject]
+      const parts = text.replace("/council", "").trim()
+      const turnMatch = parts.match(/^(\d+)\s+(.+)/)
+      const turns = turnMatch ? parseInt(turnMatch[1]) : 2
+      const subject = turnMatch ? turnMatch[2] : parts || "Open discussion"
+      sendAction("start_council", { turns, subject })
+      // The bridge will send session.resumed for the new channel — auto-navigate
     } else {
       sendMessage(text)
     }
 
     setComposerValue("")
-    // Revoke blob URLs to prevent memory leaks
-    attachments.forEach((att) => URL.revokeObjectURL(att.url))
+    attachments.forEach((att) => { try { URL.revokeObjectURL(att.url) } catch { /* ignore */ } })
     setAttachments([])
-    // Scroll to bottom on send — delay to let React render the new message
-    setTimeout(() => {
-      scrollRef.current?.scrollTo({ top: scrollRef.current!.scrollHeight, behavior: "smooth" })
-    }, 50)
+    resetScroll()
     setSettingsOpen(false)
     setShowCommandPalette(false)
   }
@@ -211,7 +226,7 @@ export default function HomePage() {
   const handleRemoveAttachment = (index: number) => {
     setAttachments((prev) => {
       const removed = prev[index]
-      if (removed) URL.revokeObjectURL(removed.url)
+      if (removed?.url) try { URL.revokeObjectURL(removed.url) } catch { /* ignore */ }
       return prev.filter((_, i) => i !== index)
     })
   }
@@ -253,12 +268,12 @@ export default function HomePage() {
 
     // Send commands: insert the command text and send
     if (command.action === "send") {
-      // Commands that take arguments: insert and let user type
-      if (command.name === "/browse" || command.name === "/search" || command.name === "/terminal" || command.name === "/vision") {
+      // Commands that need args — set text and let user add args + Enter
+      if (["/browse", "/search", "/terminal", "/vision", "/council", "/evolve", "/plan", "/review", "/debug"].includes(command.name)) {
         setComposerValue(command.name + " ")
+        setShowCommandPalette(false)
         return
       }
-      // Commands that send directly
       sendMessage(command.name)
       setComposerValue("")
     }
@@ -269,14 +284,42 @@ export default function HomePage() {
     ? composerValue.slice(1)
     : ""
 
-  // Derive session title from first user message
+  // Extract @mention query from composer value
+  const mentionQuery = React.useMemo(() => {
+    if (!showMentionPicker) return ""
+    const match = composerValue.match(/(^|[\s])@(\w*)$/)
+    return match ? match[2] : ""
+  }, [showMentionPicker, composerValue])
+
+  const handleMentionSelect = React.useCallback((agent: { id: string; name: string }) => {
+    // Replace the @partial with @agentname
+    const match = composerValue.match(/(^|.*[\s])@(\w*)$/)
+    if (match) {
+      const prefix = match[1]
+      setComposerValue(prefix + "@" + agent.name.toLowerCase() + " ")
+    }
+    setShowMentionPicker(false)
+  }, [composerValue])
+
+  // Open agent popout when clicking @mention in messages
+  const handleMentionClick = React.useCallback((agentId: string) => {
+    const agent = DEFAULT_AGENTS.find(a => a.id === agentId)
+    if (agent) setPopoutAgent(agent)
+  }, [])
+
+  // Derive channel/session title
   const sessionTitle = React.useMemo(() => {
-    if (activeSessionId === HOME_SESSION_ID) return "#general"
+    if (isDM && currentAgent) return currentAgent.role
     const firstUser = messages.find((m) => m.role === "user")
-    if (!firstUser) return "New conversation"
+    if (!firstUser) return ""
     const text = firstUser.content
     return text.length > 35 ? text.slice(0, 35) + "..." : text
-  }, [messages, activeSessionId])
+  }, [messages, isDM, currentAgent])
+
+  // Toggle agents panel — purely CSS, no window resize IPC
+  const togglePantheon = React.useCallback(() => {
+    setPantheonVisible(v => !v)
+  }, [])
 
   return (
     <div className="flex h-dvh" style={{
@@ -286,7 +329,7 @@ export default function HomePage() {
       {/* ─── Left Sidebar ─── */}
       {/* Collapsed: narrow column with eye logo + traffic light space */}
       {!isMobile && !sidebarVisible && (
-        <div className="flex flex-col items-center flex-shrink-0" style={{
+        <div className="flex flex-col items-center flex-shrink-0 panel-surface" style={{
           width: 100,
           background: "var(--color-surface)",
           borderRight: "1px solid var(--color-border-dim)",
@@ -299,8 +342,17 @@ export default function HomePage() {
       )}
       <div style={{
         width: isMobile ? 0 : sidebarVisible ? 240 : 0,
-        overflow: "hidden",
+        overflow: isMobile ? "visible" : "hidden",
         flexShrink: 0,
+      }}>
+      <div style={{
+        width: 240,
+        ...(!isMobile ? {
+          transform: sidebarVisible ? "translateX(0)" : "translateX(-100%)",
+          transition: "transform 200ms cubic-bezier(0.22, 1, 0.36, 1)",
+          willChange: "transform",
+        } : {}),
+        height: "100%",
       }}>
       <SessionSidebar
         sessionsList={sessionsList}
@@ -316,7 +368,10 @@ export default function HomePage() {
         onSidebarClose={() => setSidebarOpen(false)}
         unreadSessions={unreadSessions}
         isProcessing={isProcessing}
+        channels={channelsList}
+        onArchiveChannel={(cid) => sendAction("archive_channel", { channel_id: cid })}
       />
+      </div>
       </div>
 
       {/* ─── Main Area ─── */}
@@ -326,142 +381,22 @@ export default function HomePage() {
         onTouchStart={handleSwipeStart}
         onTouchEnd={handleSwipeEnd}
       >
-        {/* Header */}
-        <header
-          className="flex flex-col flex-shrink-0"
-          style={{
-            paddingTop: "env(safe-area-inset-top)",
-            borderBottom: "1px solid var(--color-border-dim)",
-            // @ts-expect-error WebkitAppRegion is non-standard
-            WebkitAppRegion: "drag",
-          }}
-        >
-          {/* 2px spacer to align with sidebar/agents headers */}
-          <div style={{ height: 2 }} />
-          {/* Header content row */}
-          <div className="flex items-center px-6" style={{ height: 52, gap: 12 }}>
-          {/* Left: panel toggle + agent name */}
-          <div className="flex items-center gap-3 flex-shrink-0" style={{
-            // @ts-expect-error WebkitAppRegion is non-standard
-            WebkitAppRegion: "no-drag",
-          }}>
-            {isMobile ? (
-              <button
-                aria-label="Open sidebar"
-                onClick={() => { hapticLight(); setSidebarOpen(true) }}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: 12,
-                  margin: -12,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  minWidth: 44,
-                  minHeight: 44,
-                }}
-              >
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                  <path d="M3 5h12M3 9h12M3 13h12" stroke="var(--color-text-secondary)" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
-              </button>
-            ) : (
-              <button
-                aria-label="Toggle sidebar"
-                onClick={() => {
-                  setSidebarVisible((v) => {
-                    const next = !v;
-                    (window as any).electronAPI?.resizeWindow(next ? 140 : -140)
-                    return next
-                  })
-                }}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: 6,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: sidebarVisible ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.12)",
-                  transition: "color 150ms ease",
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <rect x="1" y="2" width="14" height="12" rx="2" stroke="currentColor" strokeWidth="1.2" />
-                  <line x1="5.5" y1="2" x2="5.5" y2="14" stroke="currentColor" strokeWidth="1.2" />
-                </svg>
-              </button>
-            )}
-            <span style={{ fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)" }}>
-              {agentName}
-            </span>
-          </div>
+        <ChatHeader
+          channelName={targetName}
+          isDM={isDM}
+          currentAgent={currentAgent}
+          channelColor={channelColor}
+          sessionTitle={sessionTitle}
+          contextPressure={contextPressure}
+          isMobile={isMobile}
+          sidebarVisible={sidebarVisible}
+          pantheonVisible={pantheonVisible}
+          onToggleSidebar={() => setSidebarVisible((v) => !v)}
+          onTogglePantheon={togglePantheon}
+          onOpenMobileSidebar={() => setSidebarOpen(true)}
+        />
 
-          {/* Center: session title — takes all remaining space, truncates */}
-          <div style={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: 13,
-            fontWeight: 400,
-            color: "var(--color-text-tertiary)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap" as const,
-            pointerEvents: "none",
-          }}>
-            {sessionTitle}
-          </div>
-
-          {/* Right: context pressure + activity toggle */}
-          <div className="flex items-center gap-3 flex-shrink-0" style={{
-            // @ts-expect-error WebkitAppRegion is non-standard
-            WebkitAppRegion: "no-drag",
-          }}>
-            {contextPressure > 0 && (
-              <div className="flex items-center gap-2">
-                <span style={{ fontFamily: "var(--font-geist-mono), monospace", fontSize: 10, color: "var(--color-text-quaternary)" }}>{contextPressure}%</span>
-                <div style={{ width: 64, height: 3, borderRadius: 2, background: "var(--color-border-dim)", overflow: "hidden" }}>
-                  <div className="pressure-bar-fill" style={{ width: `${contextPressure}%`, height: "100%", borderRadius: 2, background: contextPressure > 80 ? "rgba(239,68,68,0.5)" : "rgba(255,255,255,0.3)" }} />
-                </div>
-              </div>
-            )}
-          </div>
-          </div>{/* end header content row */}
-        </header>
-
-        {/* Offline banner */}
-        {connectionState === "disconnected" && (
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-            padding: "8px 16px",
-            background: "rgba(239,68,68,0.08)",
-            borderBottom: "1px solid rgba(239,68,68,0.15)",
-            flexShrink: 0,
-          }}>
-            <span style={{ fontSize: 12, color: "rgba(239,68,68,0.7)" }}>Connection lost</span>
-            <button
-              onClick={() => { hapticLight(); reconnect() }}
-              style={{
-                fontSize: 12,
-                fontWeight: 500,
-                color: "rgba(255,255,255,0.7)",
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                borderRadius: 6,
-                padding: "4px 12px",
-                cursor: "pointer",
-                minHeight: 28,
-              }}
-            >
-              Retry
-            </button>
-          </div>
-        )}
+        {connectionState === "disconnected" && <OfflineBanner onReconnect={reconnect} />}
 
         {/* ─── Chat ─── */}
         <>
@@ -476,31 +411,13 @@ export default function HomePage() {
                 }
               }}
               className="flex-1 overflow-y-auto px-6 py-4" style={{ overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", paddingBottom: 16 }}>
+              <MentionClickProvider value={handleMentionClick}>
               <div className="mx-auto" style={{ maxWidth: 640 }}>
                 {messages.length === 0 ? (
-                  <div style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    minHeight: "60vh",
-                    gap: 20,
-                  }}>
-                    <div style={{ opacity: 0.15 }}>
-                      <IrisLogo size={48} />
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 14, fontWeight: 400, color: "var(--color-text-tertiary)", textAlign: "center", maxWidth: 320, lineHeight: 1.5 }}>
-                        Inspect code, debug issues, run commands, or ask anything.
-                      </span>
-                      <span style={{ fontSize: 12, color: "var(--color-text-quaternary)" }}>
-                        Type <span style={{ color: "var(--color-iris-purple)", fontFamily: "var(--font-geist-mono), monospace" }}>/</span> to see available commands
-                      </span>
-                    </div>
-                  </div>
+                  <EmptyState currentAgent={currentAgent ?? undefined} isArchiveChannel={isArchiveChannel} />
                 ) : (
                   <>
-                    <MessageList messages={messages} agentName={agentName} />
+                    <MessageList messages={messages} agentName={currentAgent ? currentAgent.name : agentName} agentColor={channelColor} collapsedByDefault={activeSessionId.startsWith("council-")} />
 
                     {/* Inline approval actions from activity */}
                     {activities
@@ -513,6 +430,7 @@ export default function HomePage() {
                   </>
                 )}
               </div>
+              </MentionClickProvider>
             </div>
 
             {/* Scroll to bottom arrow */}
@@ -524,10 +442,10 @@ export default function HomePage() {
                     width: 36,
                     height: 36,
                     borderRadius: "50%",
-                    background: "rgba(255,255,255,0.1)",
+                    background: "var(--color-border-subtle)",
                     backdropFilter: "blur(8px)",
                     WebkitBackdropFilter: "blur(8px)",
-                    border: "1px solid rgba(255,255,255,0.1)",
+                    border: "1px solid var(--color-border-subtle)",
                     cursor: "pointer",
                     display: "flex",
                     alignItems: "center",
@@ -535,7 +453,7 @@ export default function HomePage() {
                     boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
                   }}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 5v14M19 12l-7 7-7-7" />
                   </svg>
                 </button>
@@ -555,23 +473,34 @@ export default function HomePage() {
                     setComposerValue("")
                   }}
                 />
+                <MentionPicker
+                  query={mentionQuery}
+                  visible={showMentionPicker && !showCommandPalette}
+                  onSelect={handleMentionSelect}
+                  onClose={() => setShowMentionPicker(false)}
+                />
                 <Composer
                   value={composerValue}
                   onChange={(val) => {
                     setComposerValue(val)
-                    // Show palette when typing / at start
-                    if (val.startsWith("/") && !showCommandPalette) {
+                    if (val === "/") {
                       setShowCommandPalette(true)
-                    }
-                    // Hide if user deletes the /
-                    if (!val.startsWith("/") && showCommandPalette) {
+                    } else if (val.startsWith("/") && val.includes(" ")) {
+                      // User is typing args after command — dismiss palette
+                      setShowCommandPalette(false)
+                    } else if (val.startsWith("/") && !val.includes(" ") && !showCommandPalette) {
+                      setShowCommandPalette(true)
+                    } else if (!val.startsWith("/")) {
                       setShowCommandPalette(false)
                     }
                   }}
                   onSend={handleSend}
                   isProcessing={isProcessing}
+                  isChannel={!isDM}
                   showCommandPalette={showCommandPalette}
                   onCommandPaletteChange={setShowCommandPalette}
+                  showMentionPicker={showMentionPicker}
+                  onMentionPickerChange={setShowMentionPicker}
                   attachments={attachments}
                   onFilesAttached={handleFilesAttached}
                   onRemoveAttachment={handleRemoveAttachment}
@@ -583,48 +512,30 @@ export default function HomePage() {
       </main>
 
       {/* ─── Right Panel: Agents ─── */}
-      {/* Desktop: inline panel */}
-      {!isMobile && pantheonVisible && (
+      {/* Desktop: inline panel with smooth transition */}
+      {!isMobile && (
         <div style={{
-          width: 220,
+          width: pantheonVisible ? 220 : 0,
           flexShrink: 0,
           height: "100%",
           overflow: "hidden",
         }}>
-          <PantheonPanel isProcessing={isProcessing} />
+          <div style={{
+            width: 220,
+            height: "100%",
+            transform: pantheonVisible ? "translateX(0)" : "translateX(100%)",
+            transition: "transform 200ms cubic-bezier(0.22, 1, 0.36, 1)",
+            willChange: "transform",
+          }}>
+            <PantheonPanel isProcessing={isProcessing} activeSessionId={activeSessionId} liveAgents={agentsData} queueStatus={queueStatus} sessionRoster={effectiveRoster} onAgentClick={(agent) => setPopoutAgent(agent)} onOpenDM={(agentId) => { navigateTo({ kind: "dm", agentId }); setPopoutAgent(null) }} />
+          </div>
         </div>
       )}
       {/* Mobile: slide-in from right */}
       {isMobile && (
-        <>
-          <div
-            onClick={() => setAgentPanelOpen(false)}
-            style={{
-              position: "fixed",
-              inset: 0,
-              background: "rgba(0,0,0,0.6)",
-              zIndex: 40,
-              opacity: agentPanelOpen ? 1 : 0,
-              pointerEvents: agentPanelOpen ? "auto" : "none",
-              transition: "opacity 300ms cubic-bezier(0.32, 0.72, 0, 1)",
-            }}
-          />
-          <aside
-            style={{
-              position: "fixed",
-              top: 0,
-              right: 0,
-              bottom: 0,
-              width: 260,
-              zIndex: 50,
-              transform: agentPanelOpen ? "translateX(0)" : "translateX(100%)",
-              transition: "transform 300ms cubic-bezier(0.32, 0.72, 0, 1)",
-              paddingBottom: "env(safe-area-inset-bottom)",
-            }}
-          >
-            <PantheonPanel isProcessing={isProcessing} />
-          </aside>
-        </>
+        <MobileDrawer isOpen={agentPanelOpen} onClose={() => setAgentPanelOpen(false)}>
+          <PantheonPanel isProcessing={isProcessing} activeSessionId={activeSessionId} liveAgents={agentsData} queueStatus={queueStatus} sessionRoster={effectiveRoster} onAgentClick={(agent) => setPopoutAgent(agent)} onOpenDM={(agentId) => { navigateTo({ kind: "dm", agentId }); setPopoutAgent(null) }} />
+        </MobileDrawer>
       )}
 
       {/* ─── Settings Modal ─── */}
@@ -639,6 +550,8 @@ export default function HomePage() {
         model={model}
         provider={provider}
         agentName={agentName}
+        providersData={providersData}
+        requestProviders={requestProviders}
         memoryData={memoryData}
         requestMemory={requestMemory}
         toolsetsData={toolsetsData}
@@ -657,7 +570,28 @@ export default function HomePage() {
         triggerJob={triggerJob}
         removeJob={removeJob}
         getJobOutput={getJobOutput}
+        projectsList={projectsList}
+        activeSessionId={activeSessionId}
+        onCreateProject={createProject}
+        onUpdateProject={updateProjectAction}
+        onDeleteProject={deleteProjectAction}
+        onLinkSession={linkSessionAction}
+        onUnlinkSession={unlinkSessionAction}
+        requestProjects={requestProjects}
       />
+
+      {/* ─── Agent Popout (triggered from sidebar or agents panel) ─── */}
+      {popoutAgent && (
+        <AgentPopout
+          agent={popoutAgent}
+          onClose={() => setPopoutAgent(null)}
+          onOpenDM={(agentId) => {
+            navigateTo({ kind: "dm", agentId })
+            setPopoutAgent(null)
+          }}
+          onRestart={restartAgent}
+        />
+      )}
     </div>
   )
 }

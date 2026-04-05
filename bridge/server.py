@@ -67,6 +67,7 @@ foreground_clients: set[WebSocket] = set()  # clients with app in foreground
 sessions: dict[str, dict] = {}  # session_id -> {agent, history}
 running_threads: dict[str, threading.Thread] = {}
 cancel_flags: dict[str, bool] = {}
+_cancel_lock = threading.Lock()
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _start_time = time.time()
 _RESTART_SOCKET_PATH = "/tmp/iris-profile-restart.sock"
@@ -92,16 +93,18 @@ agent_queues: dict[str, _queue_mod.Queue] = {}
 agent_queue_workers: dict[str, threading.Thread] = {}
 agent_current_job: dict[str, Optional[AgentJob]] = {}
 _job_counter: int = 0
+_job_counter_lock = threading.Lock()
 
 def _next_job_id() -> str:
     global _job_counter
-    _job_counter += 1
-    return f"job-{int(time.time())}-{_job_counter}"
+    with _job_counter_lock:
+        _job_counter += 1
+        return f"job-{int(time.time())}-{_job_counter}"
 
 def _broadcast_queue_status():
     """Emit current queue depths to all clients."""
     status = {}
-    for profile in ("hermes", "talos", "icarus", "charon", "nyx"):
+    for profile in PROFILE_NAMES:
         q = agent_queues.get(profile)
         current = agent_current_job.get(profile)
         status[profile] = {
@@ -138,9 +141,44 @@ def _agent_queue_worker(profile: str):
             _broadcast_queue_status()
             q.task_done()
 
+def _cleanup_stale_state():
+    """Periodic cleanup of unbounded dicts. Run from a background thread."""
+    MAX_SESSIONS = 50
+    MAX_ACTIVITIES = 30
+    while True:
+        try:
+            time.sleep(300)  # Every 5 minutes
+            # Trim sessions dict — keep last N by insertion order
+            if len(sessions) > MAX_SESSIONS:
+                keys = list(sessions.keys())
+                for k in keys[:-MAX_SESSIONS]:
+                    sessions.pop(k, None)
+            # Trim session_activities
+            if len(session_activities) > MAX_ACTIVITIES:
+                keys = list(session_activities.keys())
+                for k in keys[:-MAX_ACTIVITIES]:
+                    _save_activities(k)
+                    session_activities.pop(k, None)
+            # Trim session_roster
+            if len(session_roster) > MAX_SESSIONS:
+                keys = list(session_roster.keys())
+                for k in keys[:-MAX_SESSIONS]:
+                    session_roster.pop(k, None)
+            # Trim channel_private_histories
+            if len(channel_private_histories) > MAX_SESSIONS:
+                keys = list(channel_private_histories.keys())
+                for k in keys[:-MAX_SESSIONS]:
+                    channel_private_histories.pop(k, None)
+            # Clean stale stream buffers (older than 10 min)
+            stale = [k for k, v in _session_stream_buffers.items() if not v]
+            for k in stale:
+                _session_stream_buffers.pop(k, None)
+        except Exception:
+            pass
+
 def _init_agent_queues():
     """Initialize queues and worker threads for all profiles."""
-    for profile in ("hermes", "talos", "icarus", "charon", "nyx"):
+    for profile in PROFILE_NAMES:
         agent_queues[profile] = _queue_mod.Queue()
         agent_current_job[profile] = None
         t = threading.Thread(
@@ -228,112 +266,25 @@ def _process_media_refs(text: str, session_id: str = "") -> str:
 NOTIFICATION_DIR = hermes_home / "iris_notifications"
 NOTIFICATION_DIR.mkdir(parents=True, exist_ok=True)
 
-CHANNELS_DIR = hermes_home / "iris_channels"
-CHANNELS_DIR.mkdir(parents=True, exist_ok=True)
+from channels import ChannelManager, extract_agent_mentions
 
-CHANNEL_META_PATH = CHANNELS_DIR / "_meta.json"
+channel_mgr = ChannelManager(hermes_home / "iris_channels")
 
-def _load_channel_meta() -> dict[str, dict]:
-    """Load channel metadata (name, status, project_id, created_at, agent_ids)."""
-    if CHANNEL_META_PATH.exists():
-        try:
-            return json.loads(CHANNEL_META_PATH.read_text())
-        except Exception:
-            pass
-    # Bootstrap: scan existing channel JSON files + ensure general exists
-    meta: dict[str, dict] = {}
-    for f in CHANNELS_DIR.glob("*.json"):
-        if f.name.startswith("_"):
-            continue
-        cid = f.stem
-        meta[cid] = {"name": cid, "status": "active", "created_at": f.stat().st_mtime, "agent_ids": ["hermes"]}
-    if "general" not in meta:
-        meta["general"] = {"name": "general", "status": "active", "created_at": time.time(), "agent_ids": ["hermes"]}
-    _save_channel_meta(meta)
-    return meta
-
-def _save_channel_meta(meta: dict[str, dict]):
-    tmp = CHANNEL_META_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(meta, indent=2, default=str))
-    tmp.replace(CHANNEL_META_PATH)
-
-def _create_channel(channel_id: str, name: str = "", project_id: str = "", agent_ids: list[str] | None = None) -> dict:
-    meta = _load_channel_meta()
-    valid_agents = [a for a in (agent_ids or ["hermes"]) if a in PROFILE_NAMES]
-    entry = {
-        "name": name or channel_id,
-        "status": "active",
-        "project_id": project_id,
-        "created_at": time.time(),
-        "agent_ids": valid_agents or ["hermes"],
-    }
-    meta[channel_id] = entry
-    _save_channel_meta(meta)
+# Thin wrappers for backward compatibility within this file
+def _create_channel(channel_id, name="", project_id="", agent_ids=None):
+    ch = channel_mgr.create(channel_id, name, project_id, agent_ids)
     _ensure_public_channel_session(channel_id)
-    return {"id": channel_id, **entry}
-
-def _archive_channel(channel_id: str) -> bool:
-    meta = _load_channel_meta()
-    if channel_id in meta:
-        meta[channel_id]["status"] = "archived"
-        meta[channel_id]["archived_at"] = time.time()
-        _save_channel_meta(meta)
-        return True
-    return False
-
-def _unarchive_channel(channel_id: str) -> bool:
-    meta = _load_channel_meta()
-    if channel_id in meta:
-        meta[channel_id]["status"] = "active"
-        meta[channel_id].pop("archived_at", None)
-        _save_channel_meta(meta)
-        return True
-    return False
-
-def _list_channels() -> list[dict]:
-    meta = _load_channel_meta()
-    result = []
-    for cid, info in meta.items():
-        result.append({"id": cid, **info})
-    return result
-
-
-def _channel_agent_ids(channel_id: str) -> list[str]:
-    meta = _load_channel_meta()
-    info = meta.get(channel_id, {})
-    ids = info.get("agent_ids") or ["hermes"]
-    return [a for a in ids if a in PROFILE_NAMES] or ["hermes"]
+    return ch
+def _archive_channel(channel_id): return channel_mgr.archive(channel_id)
+def _unarchive_channel(channel_id): return channel_mgr.unarchive(channel_id)
+def _list_channels(): return channel_mgr.list_all()
+def _append_channel_message(channel_id, role, content, agent_id=None): channel_mgr.append_message(channel_id, role, content, agent_id)
+def _recent_channel_context(channel_id, limit=18): return channel_mgr.recent_context(channel_id, limit)
+def _extract_agent_mentions(text): return extract_agent_mentions(text)
+def _channel_agent_ids(channel_id): return channel_mgr.get_agent_ids(channel_id)
 
 session_activities: dict[str, list] = {}
 channel_private_histories: dict[str, list] = {}
-
-
-def _channel_path(channel_id: str) -> Path:
-    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", channel_id)
-    return CHANNELS_DIR / f"{safe}.json"
-
-
-def _load_channel_messages(channel_id: str) -> list[dict]:
-    path = _channel_path(channel_id)
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text())
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        print(f"[iris-bridge] Failed to load channel transcript for {channel_id}: {e}")
-        return []
-
-
-def _save_channel_messages(channel_id: str, messages: list[dict]) -> None:
-    path = _channel_path(channel_id)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp.write_text(json.dumps(messages, default=str))
-        tmp.replace(path)
-    except Exception as e:
-        print(f"[iris-bridge] Failed to save channel transcript for {channel_id}: {e}")
-
 
 def _ensure_public_channel_session(channel_id: str) -> None:
     try:
@@ -345,124 +296,31 @@ def _ensure_public_channel_session(channel_id: str) -> None:
         pass
 
 
-def _append_channel_message(channel_id: str, role: str, content: str, agent_id: str | None = None) -> None:
-    msgs = _load_channel_messages(channel_id)
-    msgs.append({
-        "id": uuid.uuid4().hex,
-        "role": role,
-        "content": content,
-        "timestamp": time.time(),
-        "agentId": agent_id,
-    })
-    _save_channel_messages(channel_id, msgs)
-
-
-def _recent_channel_context(channel_id: str, limit: int = 18) -> str:
-    msgs = _load_channel_messages(channel_id)[-limit:]
-    lines = []
-    for m in msgs:
-        role = m.get("role", "assistant")
-        content = str(m.get("content", "")).strip()
-        if not content:
-            continue
-        if role == "user":
-            author = "user"
-        elif role == "divider":
-            author = "divider"
-        else:
-            author = m.get("agentId") or "hermes"
-        lines.append(f"[{author}] {content}")
-    return "\n".join(lines)
-
-
-def _extract_agent_mentions(text: str) -> tuple[list[str], str]:
-    mentions = re.findall(r"@([a-zA-Z0-9_-]+)", text)
-    agent_mentions = [m.lower() for m in mentions if m.lower() in PROFILE_NAMES]
-    if not agent_mentions:
-        return [], text.strip()
-    stripped = re.sub(r"(?:^|\s)@(?:hermes|talos|icarus|charon|nyx)\b", "", text, flags=re.IGNORECASE).strip()
-    return list(dict.fromkeys(agent_mentions)), stripped or text.strip()
-
-
 def _run_channel_agent(channel_id: str, prompt_text: str, agent_id: str) -> None:
-    runtime_manager = get_runtime_manager()
+    """Run an agent in a channel context. Delegates to _run_agent_common."""
     public_context = _recent_channel_context(channel_id)
+    private_session_id = f"channel:{channel_id}:{agent_id}"
+    channel_prompt = (
+        f"You are participating in shared channel #{channel_id}.\n"
+        f"Recent public channel transcript:\n{public_context or '[empty]'}\n\n"
+        f"Latest addressed message:\n{prompt_text}\n\n"
+        f"Reply directly. Do NOT prefix your response with your name or any label — "
+        f"the UI already shows who you are. Just respond naturally."
+    )
 
-    try:
-        private_session_id = f"channel:{channel_id}:{agent_id}"
-        channel_prompt = (
-            f"You are participating in shared channel #{channel_id}.\n"
-            f"Recent public channel transcript:\n{public_context or '[empty]'}\n\n"
-            f"Latest addressed message:\n{prompt_text}\n\n"
-            f"Reply directly. Do NOT prefix your response with your name or any label — "
-            f"the UI already shows who you are. Just respond naturally."
-        )
+    def channel_emit(event_type: str, data: dict):
+        patched = {**data, "session_id": channel_id, "agentId": agent_id}
+        emit(event_type, patched)
 
-        def channel_emit(event_type: str, data: dict):
-            """Proxy emit that rewrites session_id to the public channel so events show in the right chat."""
-            patched = {**data, "session_id": channel_id, "agentId": agent_id}
-            emit(event_type, patched)
-
-        # Emit response.started so frontend creates a streaming placeholder
-        emit("response.started", {"session_id": channel_id, "agentId": agent_id})
-
-        result = runtime_manager.run(
-            profile=agent_id,
-            session_id=private_session_id,
-            message=channel_prompt,
-            history=channel_private_histories.get(private_session_id, []),
-            emit=channel_emit,
-            images=None,
-            attachments=None,
-        )
-
-        if result and "messages" in result:
-            channel_private_histories[private_session_id] = result["messages"]
-
-        response = result.get("final_response", "") if result else ""
-        if not response:
-            emit("response.completed", {"session_id": channel_id, "final_response": "", "agentId": agent_id})
-            return
-        response = _process_media_refs(response, channel_id)
-        _append_channel_message(channel_id, "assistant", response, agent_id)
-        _add_to_roster(channel_id, agent_id)
-        try:
-            session_db.append_message(channel_id, "assistant", content=response)
-        except Exception:
-            pass
-
-        # Emit response.completed so frontend finalizes the streaming message
-        emit("response.completed", {
-            "session_id": channel_id,
-            "final_response": response,
-            "agentId": agent_id,
-            "api_calls": result.get("api_calls", 0) if result else 0,
-        })
-
-        # Agent-to-agent routing: if response mentions other agents, enqueue follow-ups
-        mentioned_agents, stripped = _extract_agent_mentions(response)
-        for target_agent in mentioned_agents:
-            if target_agent != agent_id:
-                followup = AgentJob(
-                    job_id=_next_job_id(),
-                    profile=target_agent,
-                    session_id=channel_id,
-                    message=f"[{agent_id} said]: {response}",
-                    kind="channel",
-                    channel_id=channel_id,
-                )
-                q = agent_queues.get(target_agent)
-                if q:
-                    q.put(followup)
-                    emit("queue.job_queued", {
-                        "profile": target_agent,
-                        "job_id": followup.job_id,
-                        "session_id": channel_id,
-                        "position": q.qsize(),
-                        "delegated_from": agent_id,
-                    })
-    except Exception as e:
-        print(f"[iris-bridge] channel agent error ({agent_id} in {channel_id}): {e}", flush=True)
+    _run_agent_common(
+        session_id=private_session_id,
+        public_session_id=channel_id,
+        profile=agent_id,
+        message=channel_prompt,
+        history=channel_private_histories.get(private_session_id, []),
+        emit_fn=channel_emit,
+        is_channel=True,
+    )
 
 
 def _save_activities(session_id: str):
@@ -684,89 +542,135 @@ def _check_ws_auth(data: dict) -> bool:
 # ─── Agent runner ───
 
 def run_agent_sync(session_id: str, message: str, images: list = None, attachments: list = None):
-    """Run agent.run_conversation in an isolated profile worker."""
+    """Run agent in a DM context. Delegates to _run_agent_common."""
+    profile = resolve_profile_for_session(session_id)
+
+    # Inject project context if session is part of a project
+    effective_message = message
     try:
-        print(f"[iris-bridge] run_agent_sync: session={session_id}, msg={str(message)[:50]}", flush=True)
+        from projects import find_project_for_session, get_project_context
+        project = find_project_for_session(session_id)
+        if project:
+            ctx = get_project_context(project["id"])
+            if ctx:
+                effective_message = f"[Project: {project['name']}]\n{ctx}\n\n{message}"
+    except Exception:
+        pass
+
+    _run_agent_common(
+        session_id=session_id,
+        public_session_id=session_id,
+        profile=profile,
+        message=effective_message,
+        history=sessions.get(session_id, {}).get("history", []),
+        emit_fn=emit,
+        images=images,
+        attachments=attachments,
+        is_channel=False,
+    )
+
+
+def _run_agent_common(
+    session_id: str,
+    public_session_id: str,
+    profile: str,
+    message: str,
+    history: list,
+    emit_fn,
+    images: list = None,
+    attachments: list = None,
+    is_channel: bool = False,
+):
+    """Unified agent execution for both DM and channel contexts.
+
+    session_id: the internal session ID (for channels: "channel:general:talos")
+    public_session_id: the user-visible session ID (for channels: "general", for DMs: same as session_id)
+    """
+    try:
+        print(f"[iris-bridge] run_agent: profile={profile}, session={public_session_id}, msg={str(message)[:50]}", flush=True)
         cfg = adapter.reload_config()
-        profile = resolve_profile_for_session(session_id)
         runtime = get_runtime_manager().ensure(profile)
 
         # Auto-create session in DB if needed
         try:
-            existing = session_db.get_session_title(session_id)
+            existing = session_db.get_session_title(public_session_id)
             if existing is None:
-                session_db.create_session(session_id=session_id, source="iris", model=cfg["model"])
+                session_db.create_session(session_id=public_session_id, source="iris", model=cfg["model"])
         except Exception:
             pass
 
-        cancel_flags[session_id] = False
-        emit("response.started", {"session_id": session_id, "agentId": profile})
-
-        # Inject project context if session is part of a project
-        effective_message = message
-        try:
-            from projects import find_project_for_session, get_project_context
-            project = find_project_for_session(session_id)
-            if project:
-                ctx = get_project_context(project["id"])
-                if ctx:
-                    effective_message = f"[Project: {project['name']}]\n{ctx}\n\n{message}"
-        except Exception:
-            pass
+        with _cancel_lock:
+            cancel_flags[public_session_id] = False
+        emit_fn("response.started", {"session_id": public_session_id, "agentId": profile})
 
         result = runtime.run(
             session_id=session_id,
-            message=effective_message,
-            history=sessions.get(session_id, {}).get("history", []),
-            emit=emit,
+            message=message,
+            history=history,
+            emit=emit_fn,
             images=images,
             attachments=attachments,
         )
 
         # Check if cancelled
-        if cancel_flags.get(session_id):
-            emit("response.cancelled", {"session_id": session_id})
-            cancel_flags.pop(session_id, None)
-            running_threads.pop(session_id, None)
+        with _cancel_lock:
+            cancelled = cancel_flags.pop(public_session_id, False)
+        if cancelled:
+            emit_fn("response.cancelled", {"session_id": public_session_id})
             return
 
-        session = sessions.setdefault(session_id, {"history": [], "profile": profile})
-        if result and "messages" in result:
-            session["history"] = result["messages"]
+        # Update history cache
+        if is_channel:
+            if result and "messages" in result:
+                channel_private_histories[session_id] = result["messages"]
+        else:
+            session = sessions.setdefault(session_id, {"history": [], "profile": profile})
+            if result and "messages" in result:
+                session["history"] = result["messages"]
 
+        # Extract final response
         final_response = result.get("final_response", "") if result else ""
         if not final_response:
-            streamed = "".join(_session_stream_buffers.get(session_id, []))
+            streamed = "".join(_session_stream_buffers.get(public_session_id, []))
             if streamed:
                 final_response = streamed.strip()
-        _session_stream_buffers.pop(session_id, None)
+        _session_stream_buffers.pop(public_session_id, None)
 
         if final_response:
-            final_response = _process_media_refs(final_response, session_id)
+            final_response = _process_media_refs(final_response, public_session_id)
 
-        _save_activities(session_id)
+        # Channel-specific: persist to transcript
+        if is_channel and final_response:
+            _append_channel_message(public_session_id, "assistant", final_response, profile)
+            try:
+                session_db.append_message(public_session_id, "assistant", content=final_response)
+            except Exception:
+                pass
 
-        _add_to_roster(session_id, profile)
+        _save_activities(public_session_id)
+        _add_to_roster(public_session_id, profile)
 
-        emit("response.completed", {
-            "session_id": session_id,
+        emit_fn("response.completed", {
+            "session_id": public_session_id,
             "final_response": final_response,
             "api_calls": result.get("api_calls", 0) if result else 0,
             "agentId": profile,
         })
 
-        # Agent-to-agent delegation: if response @mentions another agent, enqueue
-        if final_response:
+        # Agent-to-agent delegation (skip for council channels — they self-manage turns)
+        is_council = public_session_id.startswith("council-")
+        if final_response and not is_council:
             mentioned_agents, _ = _extract_agent_mentions(final_response)
             for target_agent in mentioned_agents:
                 if target_agent != profile:
-                    _add_to_roster(session_id, target_agent)
+                    _add_to_roster(public_session_id, target_agent)
                     followup = AgentJob(
                         job_id=_next_job_id(),
                         profile=target_agent,
-                        session_id=session_id,
-                        message=f"[{profile} delegated to you]: {final_response}",
-                        kind="dm",
+                        session_id=public_session_id,
+                        message=f"[{profile} {'said' if is_channel else 'delegated to you'}]: {final_response}",
+                        kind="channel" if is_channel else "dm",
+                        channel_id=public_session_id if is_channel else None,
                     )
                     q = agent_queues.get(target_agent)
                     if q:
@@ -774,19 +678,29 @@ def run_agent_sync(session_id: str, message: str, images: list = None, attachmen
                         emit("queue.job_queued", {
                             "profile": target_agent,
                             "job_id": followup.job_id,
-                            "session_id": session_id,
+                            "session_id": public_session_id,
                             "position": q.qsize(),
                             "delegated_from": profile,
                         })
+                        # Visible delegation indicator for the UI
+                        emit("agent.delegated", {
+                            "session_id": public_session_id,
+                            "from_agent": profile,
+                            "to_agent": target_agent,
+                            "job_id": followup.job_id,
+                        })
 
-        if not clients and final_response:
-            _write_desktop_notification(session_id, final_response[:200])
+        # DM-specific: push notifications
+        if not is_channel:
+            if not clients and final_response:
+                _write_desktop_notification(public_session_id, final_response[:200])
+            if final_response:
+                preview = final_response[:200].replace("\n", " ").strip()
+                _send_push_notification("Hermes", preview, public_session_id)
 
-        if final_response:
-            preview = final_response[:200].replace("\n", " ").strip()
-            _send_push_notification("Hermes", preview, session_id)
-
-        running_threads.pop(session_id, None)
+        running_threads.pop(public_session_id, None)
+        with _cancel_lock:
+            cancel_flags.pop(public_session_id, None)
 
     except Exception as e:
         error_msg = str(e)
@@ -801,11 +715,15 @@ def run_agent_sync(session_id: str, message: str, images: list = None, attachmen
             error_msg = "Connection error. Check your network and API endpoint."
 
         emit("response.error", {
-            "session_id": session_id,
+            "session_id": public_session_id,
             "error": error_msg,
-            "agentId": resolve_profile_for_session(session_id),
+            "agentId": profile,
         })
-        running_threads.pop(session_id, None)
+        # Cleanup stale state
+        running_threads.pop(public_session_id, None)
+        with _cancel_lock:
+            cancel_flags.pop(public_session_id, None)
+        _session_stream_buffers.pop(public_session_id, None)
 
 
 # ─── FastAPI app ───
@@ -909,7 +827,7 @@ async def push_register(request: Request):
             "platform": platform,
             "registered_at": time.time(),
         })
-        PUSH_TOKENS_FILE.write_text(json.dumps(tokens, indent=2))
+        _tmp = PUSH_TOKENS_FILE.with_suffix(".tmp"); _tmp.write_text(json.dumps(tokens, indent=2)); _tmp.replace(PUSH_TOKENS_FILE)
 
     return {"status": "ok", "total_tokens": len(tokens)}
 
@@ -1094,6 +1012,232 @@ async def hermes_home_message(request: Request):
     }
 
 
+# ─── Channel management HTTP API (for agent tool use) ───
+
+@app.post("/channels/create")
+async def create_channel_http(request: Request):
+    """Create a channel. Agents can call this via terminal tool."""
+    body = await request.json()
+    channel_id = (body.get("channel_id") or body.get("name", "")).strip().lower().replace(" ", "-")
+    if not channel_id:
+        channel_id = f"ch-{uuid.uuid4().hex[:6]}"
+    name = body.get("name", channel_id)
+    project_id = body.get("project_id", "")
+    agent_ids = body.get("agent_ids")
+    ch = _create_channel(channel_id, name, project_id, agent_ids)
+    emit("channel.created", ch)
+    if project_id:
+        try:
+            from projects import link_session
+            link_session(project_id, channel_id)
+        except Exception:
+            pass
+    return ch
+
+@app.post("/channels/archive")
+async def archive_channel_http(request: Request):
+    body = await request.json()
+    cid = body.get("channel_id", "")
+    if _archive_channel(cid):
+        emit("channel.archived", {"channel_id": cid})
+        return {"status": "archived", "channel_id": cid}
+    return JSONResponse(status_code=404, content={"error": "channel not found"})
+
+@app.post("/evolve")
+async def evolve_skill_http(request: Request):
+    """Trigger self-evolution for a skill. Uses the configured Hermes LLM."""
+    body = await request.json()
+    skill_name = body.get("skill", "").strip()
+    iterations = min(int(body.get("iterations", 5)), 20)
+    eval_source = body.get("eval_source", "synthetic")
+    profile = body.get("profile", "hermes")
+    dry_run = body.get("dry_run", False)
+
+    if not skill_name:
+        return JSONResponse(status_code=400, content={"error": "skill name required"})
+
+    # Get model config from Hermes to use the same LLM
+    cfg = adapter.reload_config()
+    model_name = cfg.get("model", "gpt-5.4-mini")
+    provider = cfg.get("provider", "openai-codex")
+
+    # Map to litellm-compatible model string for DSPy
+    if "claude" in model_name:
+        short = model_name.rsplit("-", 1)[0] if model_name[-1].isdigit() and len(model_name.split("-")) > 4 else model_name
+        dspy_model = f"anthropic/{short}"
+    else:
+        dspy_model = f"openai/{model_name}"
+
+    def _run_evolution():
+        try:
+            import sys as _s
+            evo_path = str(Path.home() / "hermes-ecosystem" / "hermes-agent-self-evolution")
+            if evo_path not in _s.path:
+                _s.path.insert(0, evo_path)
+            from evolution.skills.evolve_skill import evolve
+
+            # Point at the correct profile's skills
+            from hermes_adapter import get_profile_home
+            profile_home = get_profile_home(profile)
+            hermes_repo = str(HERMES_DIR)
+
+            evolve(
+                skill_name=skill_name,
+                iterations=iterations,
+                eval_source=eval_source,
+                optimizer_model=dspy_model,
+                eval_model=dspy_model,
+                hermes_repo=hermes_repo,
+                dry_run=dry_run,
+            )
+
+            emit("evolution.completed", {
+                "skill": skill_name,
+                "profile": profile,
+                "iterations": iterations,
+                "model": dspy_model,
+            })
+        except Exception as e:
+            print(f"[iris-bridge] Evolution error: {e}", flush=True)
+            emit("evolution.error", {"skill": skill_name, "error": str(e)})
+
+    # Run in background thread
+    threading.Thread(target=_run_evolution, daemon=True, name=f"evolve-{skill_name}").start()
+
+    return {"status": "started", "skill": skill_name, "iterations": iterations, "model": dspy_model, "dry_run": dry_run}
+
+@app.post("/tts")
+async def text_to_speech(request: Request):
+    """Convert text to speech using edge-tts. Returns audio file URL."""
+    body = await request.json()
+    text = body.get("text", "").strip()
+    voice = body.get("voice", "en-US-AriaNeural")
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "text required"})
+    try:
+        import edge_tts
+        filename = f"tts-{uuid.uuid4().hex[:8]}.mp3"
+        filepath = MEDIA_DIR / filename
+        communicate = edge_tts.Communicate(text[:2000], voice)
+        await communicate.save(str(filepath))
+        return {"status": "ok", "url": f"/media/{filename}", "text": text[:100]}
+    except ImportError:
+        return JSONResponse(status_code=501, content={"error": "edge-tts not installed"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/generate-image")
+async def generate_image(request: Request):
+    """Generate an image using fal.ai and return the URL."""
+    body = await request.json()
+    prompt = body.get("prompt", "").strip()
+    if not prompt:
+        return JSONResponse(status_code=400, content={"error": "prompt required"})
+    try:
+        import fal_client
+        result = fal_client.submit("fal-ai/fast-sdxl", arguments={"prompt": prompt}).get()
+        images = result.get("images", [])
+        if images:
+            url = images[0].get("url", "")
+            return {"status": "ok", "url": url, "prompt": prompt}
+        return JSONResponse(status_code=500, content={"error": "no image generated"})
+    except ImportError:
+        return JSONResponse(status_code=501, content={"error": "fal-client not installed"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/execute")
+async def execute_code(request: Request):
+    """Execute a code block from agent responses. Requires explicit confirmation."""
+    body = await request.json()
+    code = body.get("code", "").strip()
+    language = body.get("language", "bash").lower()
+    if not code:
+        return JSONResponse(status_code=400, content={"error": "code required"})
+    if language not in ("bash", "python", "python3", "sh", "zsh"):
+        return JSONResponse(status_code=400, content={"error": f"unsupported language: {language}"})
+
+    import subprocess
+    cmd = ["python3", "-c", code] if language in ("python", "python3") else ["bash", "-c", code]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=str(Path.home()))
+        return {
+            "status": "ok",
+            "exit_code": result.returncode,
+            "stdout": result.stdout[:5000],
+            "stderr": result.stderr[:2000],
+        }
+    except subprocess.TimeoutExpired:
+        return JSONResponse(status_code=408, content={"error": "execution timed out (30s)"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/search")
+async def search_sessions(q: str = "", limit: int = 20):
+    """Search across all sessions by content."""
+    if not q:
+        return {"results": []}
+    results = []
+    try:
+        all_sessions = session_db.list_sessions()
+        for sess in all_sessions[:100]:  # cap at 100 sessions to search
+            sid = sess.get("id") or sess.get("session_id", "")
+            try:
+                msgs = list(session_db.get_messages_as_conversation(sid))
+                for msg in msgs:
+                    content = msg.get("content", "")
+                    if q.lower() in content.lower():
+                        results.append({
+                            "session_id": sid,
+                            "session_title": sess.get("title", sid),
+                            "role": msg.get("role", ""),
+                            "content": content[:200],
+                            "match_preview": content[max(0, content.lower().index(q.lower()) - 40):content.lower().index(q.lower()) + 60],
+                        })
+                        if len(results) >= limit:
+                            break
+            except Exception:
+                pass
+            if len(results) >= limit:
+                break
+    except Exception as e:
+        print(f"[iris-bridge] Search error: {e}")
+    return {"query": q, "results": results}
+
+@app.get("/channels")
+async def list_channels_http():
+    return {"channels": _list_channels()}
+
+@app.get("/export/{session_id}")
+async def export_session(session_id: str, format: str = "markdown"):
+    """Export a session as markdown or JSON."""
+    try:
+        msgs = session_db.get_messages_as_conversation(session_id)
+        messages = list(msgs)
+    except Exception:
+        messages = []
+    # Also try channel transcript
+    if not messages:
+        messages = channel_mgr.load_messages(session_id)
+    if format == "json":
+        return {"session_id": session_id, "messages": messages}
+    # Markdown format
+    lines = [f"# Session: {session_id}\n"]
+    for m in messages:
+        role = m.get("role", "assistant")
+        agent = m.get("agentId") or m.get("agent_id") or ""
+        content = m.get("content", "")
+        if role == "user":
+            lines.append(f"## You\n\n{content}\n")
+        elif role == "divider":
+            lines.append(f"---\n*{content}*\n")
+        else:
+            name = agent.capitalize() if agent else "Assistant"
+            lines.append(f"## {name}\n\n{content}\n")
+    md = "\n".join(lines)
+    return JSONResponse(content={"session_id": session_id, "format": "markdown", "content": md})
+
+
 # ─── Media file serving ───
 
 @app.get("/media/{filename}")
@@ -1157,6 +1301,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # ─── send_message ───
             if action == "send_message":
+              try:
                 # Target-first routing: "dm:talos" or "channel:general"
                 target = msg.get("target")
                 if target:
@@ -1166,7 +1311,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     kind = "channel"
                     tid = msg.get("session_id", "default")
                     session_id = tid
-                text = msg.get("text", "").strip()
+                text = msg.get("text", "").strip()[:50000]  # Cap at 50K chars
                 if not text:
                     continue
 
@@ -1234,51 +1379,233 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
                     else:
                         threading.Thread(target=run_agent_sync, args=(session_id, text, images, attachments), daemon=True).start()
+              except Exception as e:
+                print(f"[iris-bridge] send_message error: {e}", flush=True)
+
+            # ─── start_council: all agents debate a topic ───
+            elif action == "start_council":
+              try:
+                subject = msg.get("subject", "Open discussion").strip()[:500]
+                turns = min(max(int(msg.get("turns", 2)), 1), 5)
+                slug = re.sub(r"[^a-z0-9]+", "-", subject.lower())[:30].strip("-")
+                channel_id = f"council-{slug}-{uuid.uuid4().hex[:4]}"
+                all_agents = list(PROFILE_NAMES)
+
+                # 1. Navigate client FIRST — instant feedback
+                await websocket.send_json({
+                    "type": "session.resumed",
+                    "session_id": channel_id,
+                    "messages": [],
+                    "activities": [],
+                    "title": f"Council: {subject[:40]}",
+                    "running_sessions": [],
+                })
+
+                # 2. Create channel + Iris intro in background thread (non-blocking)
+                def _iris_post(cid: str, text: str):
+                    _append_channel_message(cid, "assistant", text, "iris")
+                    emit("hermes.message", {"session_id": cid, "text": text, "agentId": "iris", "timestamp": time.time()})
+
+                def _setup_and_run(cid, subj, num_turns, agents):
+                    ch = _create_channel(cid, f"Council: {subj[:40]}", agent_ids=agents)
+                    emit("channel.created", ch)
+                    names = ", ".join(a.capitalize() for a in agents)
+                    _iris_post(cid, f"**{subj}**\n\n{num_turns} round{'s' if num_turns > 1 else ''} · {names}")
+
+                # Run council in background thread
+                def _run_council(cid: str, subj: str, num_turns: int, agents: list[str]):
+                    import random
+
+                    def _cancelled():
+                        return channel_mgr.load_meta().get(cid, {}).get("status") == "archived"
+
+                    def _wait_all(agent_list):
+                        deadline = time.time() + 300
+                        while time.time() < deadline:
+                            if _cancelled(): return False
+                            if all(agent_queues.get(a, _queue_mod.Queue()).empty() and not agent_current_job.get(a) for a in agent_list):
+                                return True
+                            time.sleep(1.5)
+                        return True
+
+                    # Detect question type: yes/no vs open-ended
+                    s = subj.lower().strip()
+                    is_yesno = (
+                        s.startswith(("should ", "is ", "are ", "can ", "will ", "would ", "do ", "does ", "could "))
+                        or "yes or no" in s or "or not" in s
+                    )
+
+                    for turn in range(num_turns):
+                        if _cancelled(): return
+                        rules = "2-3 sentences MAX. Stay in character."
+
+                        if turn == 0:
+                            base = f"Council topic: {subj}\n\nRound 1/{num_turns}. Give your take. {rules}"
+                        elif turn == num_turns - 1:
+                            if is_yesno:
+                                base = (
+                                    f"FINAL VOTE on: {subj}\n\n"
+                                    f"Your FIRST WORD must be YES or NO. Nothing else on the first line.\n"
+                                    f"Second line: one sentence why. {rules}"
+                                )
+                            else:
+                                base = (
+                                    f"Final round on: {subj}\n\n"
+                                    f"Give your concrete recommendation in one sentence. "
+                                    f"Start with your key action or approach. {rules}"
+                                )
+                        else:
+                            base = f"Round {turn + 1}/{num_turns} on: {subj}\n\nReact to what others said. {rules}"
+
+                        order = agents[:]
+                        random.shuffle(order)
+
+                        # All agents fire in parallel — they see previous rounds but not each other's current round
+                        for aid in order:
+                            q = agent_queues.get(aid)
+                            if q:
+                                q.put(AgentJob(
+                                    job_id=_next_job_id(), profile=aid,
+                                    session_id=cid, message=f"You are {aid.capitalize()}. Argue from YOUR role's perspective. {base}",
+                                    kind="channel", channel_id=cid,
+                                ))
+                        _wait_all(order)
+
+                        if turn < num_turns - 1:
+                            next_label = "Final round." if turn + 1 == num_turns - 1 else "Rebuttals."
+                            _iris_post(cid, f"**Round {turn + 2}** — {next_label}")
+
+                    # Verdict
+                    time.sleep(0.5)
+                    transcript = _recent_channel_context(cid, limit=50)
+
+                    if is_yesno:
+                        # Tally YES/NO votes
+                        yes_v, no_v, abstain = [], [], []
+                        for aid in agents:
+                            lines = [l for l in transcript.split("\n") if l.startswith(f"[{aid}]")]
+                            if not lines: abstain.append(aid); continue
+                            content = lines[-1].split("]", 1)[-1].strip()
+                            w = content.lstrip("*#> ").split()[0].lower().rstrip(".,!—-:*") if content.strip() else ""
+                            if w == "yes": yes_v.append(aid)
+                            elif w == "no": no_v.append(aid)
+                            elif "yes" in content.lower()[:40]: yes_v.append(aid)
+                            elif "no" in content.lower()[:40]: no_v.append(aid)
+                            else: abstain.append(aid)
+
+                        total = len(yes_v) + len(no_v)
+                        yp = round(100 * len(yes_v) / total) if total else 0
+                        if len(yes_v) > len(no_v):
+                            dec, margin = "YES", "unanimous" if not no_v else f"{len(yes_v)}-{len(no_v)}"
+                        elif len(no_v) > len(yes_v):
+                            dec, margin = "NO", "unanimous" if not yes_v else f"{len(no_v)}-{len(yes_v)}"
+                        else:
+                            dec, margin = "SPLIT", "tied"
+
+                        votes = "\n\n".join(
+                            [f"@{a} — **YES**" for a in yes_v] +
+                            [f"@{a} — **NO**" for a in no_v] +
+                            [f"@{a} — **ABSTAIN**" for a in abstain]
+                        )
+                        _iris_post(cid, f"**{dec}** ({margin}) · {yp}% yes\n\n{votes}")
+                    else:
+                        # Open-ended: summarize each agent's final position
+                        positions = []
+                        for aid in agents:
+                            lines = [l for l in transcript.split("\n") if l.startswith(f"[{aid}]")]
+                            if lines:
+                                content = lines[-1].split("]", 1)[-1].strip()[:150]
+                                positions.append(f"@{aid} — {content}")
+                        summary = "\n\n".join(positions)
+                        _iris_post(cid, f"**Council summary**\n\n{summary}")
+
+                def _council_thread(cid, subj, t, agents):
+                    _setup_and_run(cid, subj, t, agents)
+                    _run_council(cid, subj, t, agents)
+                threading.Thread(target=_council_thread, args=(channel_id, subject, turns, all_agents), daemon=True).start()
+              except Exception as e:
+                print(f"[iris-bridge] start_council error: {e}", flush=True)
+
+            # ─── evolve: trigger self-evolution (skill, soul, tool, prompt) ───
+            elif action in ("evolve_skill", "evolve_soul", "evolve_tool", "evolve_prompt"):
+                target = msg.get("skill") or msg.get("profile") or msg.get("tool") or msg.get("file") or ""
+                target = target.strip()
+                evo_type = action.replace("evolve_", "")
+                profile = msg.get("profile", "hermes")
+                iterations = min(int(msg.get("iterations", 5)), 20)
+                if target:
+                    cfg = adapter.reload_config()
+                    model_name = cfg.get("model", "gpt-5.4-mini")
+                    # Use haiku for evolution (fast, cheap, high rate limits)
+                    dspy_model = "anthropic/claude-haiku-4-5-20251001"
+
+                    def _nyx_log(msg_text: str):
+                        """Post a message to the Nyx DM as a live evolution update."""
+                        emit("hermes.message", {
+                            "session_id": "nyx",
+                            "text": msg_text,
+                            "agentId": "nyx",
+                            "timestamp": time.time(),
+                        })
+
+                    def _run_evo(t, et, prof, iters, dm):
+                        try:
+                            import sys as _s
+                            evo_path = str(Path.home() / "hermes-ecosystem" / "hermes-agent-self-evolution")
+                            if evo_path not in _s.path:
+                                _s.path.insert(0, evo_path)
+
+                            _nyx_log(f"🧬 Evolution started — **{et}**: `{t}` ({iters} iterations, model: `{dm}`)")
+
+                            if et == "skill":
+                                from evolution.skills.evolve_skill import evolve
+                                evolve(skill_name=t, iterations=iters, eval_source="synthetic",
+                                       optimizer_model=dm, eval_model=dm, hermes_repo=str(HERMES_DIR))
+                            elif et == "soul":
+                                from evolution.prompts.evolve_soul import evolve_soul
+                                evolve_soul(profile=t, iterations=iters, optimizer_model=dm, eval_model=dm)
+                            elif et == "tool":
+                                from evolution.tools.evolve_tool import evolve_tool
+                                evolve_tool(tool_name=t, iterations=iters, optimizer_model=dm, eval_model=dm,
+                                            hermes_repo=str(HERMES_DIR))
+                            elif et == "prompt":
+                                from evolution.prompts.evolve_prompt import evolve_prompt
+                                evolve_prompt(prompt_file=t, iterations=iters, optimizer_model=dm, eval_model=dm)
+
+                            _nyx_log(f"✓ Evolution complete — **{et}**: `{t}` evolved successfully")
+                            emit("evolution.completed", {"target": t, "type": et, "profile": prof, "iterations": iters})
+                        except Exception as e:
+                            _nyx_log(f"✗ Evolution failed — **{et}**: `{t}` — {str(e)[:200]}")
+                            print(f"[iris-bridge] Evolution error ({et}/{t}): {e}", flush=True)
+                            emit("evolution.error", {"target": t, "type": et, "error": str(e)})
+
+                    threading.Thread(target=_run_evo, args=(target, evo_type, profile, iterations, dspy_model), daemon=True).start()
+                    emit("evolution.started", {"target": target, "type": evo_type, "profile": profile, "iterations": iterations, "model": dspy_model})
 
             # ─── agent_post: an agent speaks in a channel as itself ───
             elif action == "agent_post":
-                agent_id = msg.get("agent_id", "")  # e.g. "talos"
+                agent_id = msg.get("agent_id", "")
                 channel_id = msg.get("channel_id", "general")
-                text = msg.get("text", "").strip()
+                text = msg.get("text", "").strip()[:50000]
                 if not agent_id or not text:
                     continue
-
-                def run_agent_post(aid: str, cid: str, prompt: str):
-                    """Run agent and post result to channel."""
-                    try:
-                        profile = aid if aid in ("hermes", "talos", "icarus", "charon", "nyx") else "hermes"
-                        post_agent = adapter.create_agent(
-                            f"{cid}-{aid}", {"emit": lambda *a, **k: None}, session_db, profile=profile
-                        )
-                        result = adapter.run_conversation(post_agent, prompt, [])
-                        response = result.get("final_response", "") if result else ""
-                        if response:
-                            post_event = {
-                                "type": "hermes.message",
-                                "session_id": cid,
-                                "text": response,
-                                "agentId": aid,
-                                "timestamp": time.time(),
-                            }
-                            emit("hermes.message", post_event)
-                            try:
-                                session_db.append_message(cid, "assistant", content=response)
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        print(f"[iris-bridge] agent_post error: {e}", flush=True)
-
-                thread = threading.Thread(
-                    target=run_agent_post,
-                    args=(agent_id, channel_id, text),
-                    daemon=True,
+                profile = agent_id if agent_id in PROFILE_NAMES else "hermes"
+                job = AgentJob(
+                    job_id=_next_job_id(),
+                    profile=profile,
+                    session_id=channel_id,
+                    message=text,
+                    kind="channel",
+                    channel_id=channel_id,
                 )
-                thread.start()
+                q = agent_queues.get(profile)
+                if q:
+                    q.put(job)
 
             # ─── cancel_response ───
             elif action == "cancel_response":
                 session_id = msg.get("session_id", "default")
-                if session_id in running_threads:
+                with _cancel_lock:
                     cancel_flags[session_id] = True
                     emit("response.cancelled", {"session_id": session_id})
                     emit("response.completed", {
@@ -1314,7 +1641,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # ─── list_sessions ───
             elif action == "list_sessions":
-                sessions_list = session_db.list_sessions_rich(source=None, limit=50)
+                try:
+                    sessions_list = session_db.list_sessions_rich(source=None, limit=50)
+                except Exception:
+                    sessions_list = []
                 await websocket.send_json({
                     "type": "sessions.list",
                     "sessions": [{
@@ -1334,7 +1664,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 if not sid:
                     continue
                 msg_limit = msg.get("limit", 50)  # Only load last N messages
-                channel_messages = _load_channel_messages(sid)
+                channel_messages = channel_mgr.load_messages(sid)
                 if channel_messages:
                     full_history = [
                         {
@@ -1346,8 +1676,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         for m in channel_messages
                     ]
                 else:
-                    history = session_db.get_messages_as_conversation(sid)
-                    full_history = list(history)
+                    try:
+                        history = session_db.get_messages_as_conversation(sid)
+                        full_history = list(history)
+                    except Exception:
+                        full_history = []
                 if sid in sessions:
                     sessions[sid]["history"] = full_history
                 else:
@@ -1383,8 +1716,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     "session_id": sid,
                     "messages": formatted,
                     "activities": saved_activities,
-                    "title": session_db.get_session_title(sid) or "",
+                    "title": (session_db.get_session_title(sid) or "") if sid else "",
                     "running_sessions": list(running_threads.keys()),
+                    # Which agents are actively processing in this session
+                    "processing_agents": [
+                        profile for profile, job in agent_current_job.items()
+                        if job and (job.session_id == sid or job.channel_id == sid)
+                    ],
                 })
 
             # ─── delete_session ───
@@ -1393,11 +1731,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 if sid == HOME_SESSION_ID:
                     pass  # Can't delete home session
                 elif sid:
-                    session_db.delete_session(sid)
-                    if sid in sessions:
-                        del sessions[sid]
+                    try:
+                        session_db.delete_session(sid)
+                    except Exception:
+                        pass
+                    sessions.pop(sid, None)
+                    session_roster.pop(sid, None)
                     emit("session.deleted", {"session_id": sid})
-                    sessions_list = session_db.list_sessions_rich(source=None, limit=50)
+                    try:
+                        sessions_list = session_db.list_sessions_rich(source=None, limit=50)
+                    except Exception:
+                        sessions_list = []
                     await websocket.send_json({
                         "type": "sessions.list",
                         "sessions": [{
@@ -1412,12 +1756,25 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # ─── get_memory ───
             elif action == "get_memory":
-                memory, user = get_memory()
-                await websocket.send_json({
-                    "type": "memory.state",
-                    "memory": memory,
-                    "user": user,
-                })
+                profile_id = msg.get("profile")
+                if profile_id and profile_id in PROFILE_NAMES:
+                    from hermes_adapter import get_profile_home
+                    home = get_profile_home(profile_id)
+                    mem_file = home / "memories" / "MEMORY.md"
+                    user_file = home / "memories" / "USER.md"
+                    await websocket.send_json({
+                        "type": "memory.state",
+                        "profile": profile_id,
+                        "memory": mem_file.read_text() if mem_file.exists() else "",
+                        "user": user_file.read_text() if user_file.exists() else "",
+                    })
+                else:
+                    memory, user = get_memory()
+                    await websocket.send_json({
+                        "type": "memory.state",
+                        "memory": memory,
+                        "user": user,
+                    })
 
             # ─── get_agents (live Pantheon state) ───
             elif action == "get_agents":
@@ -1425,7 +1782,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 runtime_manager = get_runtime_manager()
                 statuses = {s.profile: s for s in runtime_manager.statuses()}
                 agents_out = []
-                for agent_id in ["hermes", "talos", "icarus", "charon", "nyx"]:
+                for agent_id in PROFILE_NAMES:
+                  try:
                     home = get_profile_home(agent_id)
                     # Config
                     cfg = _get_cfg(home)
@@ -1480,6 +1838,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         "lastError": runtime.last_error if runtime else None,
                         "mode": "daemon" if agent_id == "nyx" else "agent",
                     })
+                  except Exception as e:
+                    agents_out.append({"id": agent_id, "name": agent_id, "error": str(e), "status": "error"})
                 await websocket.send_json({"type": "agents.list", "agents": agents_out})
 
             # ─── get_config ───
@@ -1520,6 +1880,58 @@ async def websocket_endpoint(websocket: WebSocket):
                 cid = msg.get("channel_id", "")
                 if _archive_channel(cid):
                     emit("channel.archived", {"channel_id": cid})
+
+            elif action == "pin_message":
+                cid = msg.get("channel_id") or msg.get("session_id", "")
+                mid = msg.get("message_id", "")
+                if cid and mid and channel_mgr.pin_message(cid, mid):
+                    emit("channel.pinned", {"channel_id": cid, "message_id": mid, "pinned": channel_mgr.get_pinned(cid)})
+
+            elif action == "unpin_message":
+                cid = msg.get("channel_id") or msg.get("session_id", "")
+                mid = msg.get("message_id", "")
+                if cid and mid and channel_mgr.unpin_message(cid, mid):
+                    emit("channel.pinned", {"channel_id": cid, "message_id": mid, "pinned": channel_mgr.get_pinned(cid)})
+
+            elif action == "fork_session":
+                source_sid = msg.get("session_id", "")
+                if not source_sid:
+                    continue
+                at_message_idx = msg.get("at_message_index", -1)
+                try:
+                    source_msgs = list(session_db.get_messages_as_conversation(source_sid))
+                    fork_msgs = source_msgs[:at_message_idx + 1] if at_message_idx >= 0 else source_msgs
+                    new_sid = f"{source_sid}-fork-{uuid.uuid4().hex[:6]}"
+                    cfg = _get_model_info()
+                    session_db.create_session(session_id=new_sid, source="iris", model=cfg["model"])
+                    for m in fork_msgs:
+                        session_db.append_message(new_sid, m.get("role", "user"), content=m.get("content", ""))
+                    emit("session.created", {"session_id": new_sid, "forked_from": source_sid, "message_count": len(fork_msgs)})
+                    await websocket.send_json({"type": "session.forked", "session_id": new_sid, "forked_from": source_sid, "message_count": len(fork_msgs)})
+                except Exception as e:
+                    await websocket.send_json({"type": "session.fork_error", "error": str(e)})
+
+            elif action == "get_pinned":
+                cid = msg.get("channel_id") or msg.get("session_id", "")
+                await websocket.send_json({"type": "channel.pinned", "channel_id": cid, "pinned": channel_mgr.get_pinned(cid)})
+
+            elif action == "set_channel_agents":
+                cid = msg.get("channel_id", "")
+                agent_ids = msg.get("agent_ids", [])
+                if channel_mgr.set_agent_ids(cid, agent_ids):
+                    emit("channel.updated", {"channel_id": cid, "agent_ids": channel_mgr.get_agent_ids(cid)})
+
+            elif action == "add_channel_agent":
+                cid = msg.get("channel_id", "")
+                aid = msg.get("agent_id", "")
+                if channel_mgr.add_agent(cid, aid):
+                    emit("channel.updated", {"channel_id": cid, "agent_ids": channel_mgr.get_agent_ids(cid)})
+
+            elif action == "remove_channel_agent":
+                cid = msg.get("channel_id", "")
+                aid = msg.get("agent_id", "")
+                if channel_mgr.remove_agent(cid, aid):
+                    emit("channel.updated", {"channel_id": cid, "agent_ids": channel_mgr.get_agent_ids(cid)})
 
             elif action == "unarchive_channel":
                 cid = msg.get("channel_id", "")
@@ -1584,7 +1996,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # ─── restart_agent ───
             elif action == "restart_agent":
                 profile = msg.get("profile", "")
-                if profile in ("hermes", "talos", "icarus", "charon", "nyx"):
+                if profile in PROFILE_NAMES:
                     get_runtime_manager().restart_profile(profile)
                     emit("agent.restarted", {"profile": profile})
 
@@ -1625,13 +2037,20 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # ─── get_skills ───
             elif action == "get_skills":
+                profile_id = msg.get("profile")
+                if profile_id and profile_id in PROFILE_NAMES:
+                    from hermes_adapter import get_profile_home
+                    home = get_profile_home(profile_id)
+                    cfg = get_config(home)
+                else:
+                    cfg = get_config()
                 skills = list_skills()
-                config = get_config()
-                disabled = config.get("skills", {}).get("disabled", [])
+                disabled = cfg.get("skills", {}).get("disabled", [])
                 for s in skills:
                     s["enabled"] = s["name"] not in disabled
                 await websocket.send_json({
                     "type": "skills.list",
+                    "profile": profile_id or "hermes",
                     "skills": skills,
                     "total": len(skills),
                 })
@@ -1812,7 +2231,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     existing = {t["token"] for t in tokens}
                     if token not in existing:
                         tokens.append({"token": token, "platform": platform, "registered_at": time.time()})
-                        PUSH_TOKENS_FILE.write_text(json.dumps(tokens, indent=2))
+                        _tmp = PUSH_TOKENS_FILE.with_suffix(".tmp"); _tmp.write_text(json.dumps(tokens, indent=2)); _tmp.replace(PUSH_TOKENS_FILE)
 
     except WebSocketDisconnect:
         pass
@@ -1896,6 +2315,9 @@ async def startup():
     # Initialize agent job queues
     _init_agent_queues()
     print("[iris-bridge] Agent job queues initialized")
+
+    # Start background cleanup thread
+    threading.Thread(target=_cleanup_stale_state, daemon=True, name="state-cleanup").start()
 
     # Start all profile runtimes; Nyx will supervise them via the restart RPC.
     try:

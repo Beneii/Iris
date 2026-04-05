@@ -1,0 +1,11 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Lantern -->
+  <line x1="32" y1="8" x2="32" y2="16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M24 16 L40 16 L42 28 L42 44 L22 44 L22 28Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none"/>
+  <!-- Base -->
+  <path d="M22 44 L26 50 L38 50 L42 44" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none"/>
+  <!-- Flame -->
+  <path d="M32 26 C30 30, 29 33, 32 36 C35 33, 34 30, 32 26Z" stroke="currentColor" stroke-width="1" fill="none"/>
+  <!-- Water line -->
+  <path d="M10 56 Q20 52, 32 56 Q44 60, 54 56" stroke="currentColor" stroke-width="1" stroke-linecap="round" fill="none" opacity="0.3"/>
+</svg>

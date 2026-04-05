@@ -1,0 +1,8 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Feather: single quill with barbs -->
+  <path d="M44 8 C38 18, 28 32, 18 56" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <path d="M44 8 C36 14, 30 24, 26 36" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+  <path d="M44 8 C40 16, 36 28, 32 42" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+  <!-- Sun hint -->
+  <circle cx="50" cy="10" r="4" stroke="currentColor" stroke-width="1" fill="none" opacity="0.4"/>
+</svg>

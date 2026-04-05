@@ -1,0 +1,5 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Gear: clean 6-tooth -->
+  <path d="M29 8 L35 8 L36 14 L42 11 L45 16 L40 20 L46 23 L44 29 L38 28 L38 34 L44 35 L46 41 L40 44 L45 48 L42 53 L36 50 L35 56 L29 56 L28 50 L22 53 L19 48 L24 44 L18 41 L20 35 L26 34 L26 28 L20 29 L18 23 L24 20 L19 16 L22 11 L28 14Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none"/>
+  <circle cx="32" cy="32" r="7" stroke="currentColor" stroke-width="1.5" fill="none"/>
+</svg>

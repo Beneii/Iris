@@ -12,33 +12,56 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 # ─── Hermes path setup ───
-HERMES_DIR = Path("/tmp/hermes-agent")
+HERMES_DIR = Path.home() / "hermes-agent"
 sys.path.insert(0, str(HERMES_DIR))
 
 import yaml
 
 HERMES_HOME = Path.home() / ".hermes"
 
+# ─── Profile-aware agent channels ───
+AGENT_PROFILES = {"hermes", "talos", "icarus", "charon", "nyx"}
 
-def get_config() -> dict:
-    """Load Hermes config.yaml."""
-    config_path = HERMES_HOME / "config.yaml"
+
+def get_profile_home(profile_name: str) -> Path:
+    """Resolve a profile name to its HERMES_HOME directory."""
+    return HERMES_HOME / "profiles" / profile_name
+
+
+def resolve_profile_for_session(session_id: str) -> Optional[str]:
+    """Map an Iris session/channel to a Hermes profile name.
+
+    Named agent channels always route to their matching profile. Everything else
+    routes to Hermes (the orchestrator profile) so non-agent chats are isolated
+    from the default home directory.
+    """
+    if session_id in AGENT_PROFILES:
+        return session_id
+    return "hermes"
+
+
+def get_config(home: Optional[Path] = None) -> dict:
+    """Load Hermes config.yaml from a specific home directory."""
+    config_path = (home or HERMES_HOME) / "config.yaml"
     if config_path.exists():
         with open(config_path) as f:
             return yaml.safe_load(f) or {}
     return {}
 
 
-def get_agent_name() -> str:
+def get_agent_name(home: Optional[Path] = None) -> str:
     """Extract agent name from SOUL.md (first heading)."""
-    soul_path = HERMES_HOME / "SOUL.md"
+    soul_path = (home or HERMES_HOME) / "SOUL.md"
     if soul_path.exists():
         for line in soul_path.read_text().splitlines():
             line = line.strip()
             if line.startswith("# "):
                 name = line[2:].strip()
+                # Strip common decorative chars and "— role" suffixes
                 for ch in "☤⚕️🔱":
                     name = name.replace(ch, "").strip()
+                if "—" in name:
+                    name = name.split("—")[0].strip()
                 return name or "Hermes"
     return "Hermes"
 
@@ -111,9 +134,83 @@ def get_available_toolsets() -> list[dict]:
     return result
 
 
+PROVIDER_MODELS = {
+    "anthropic": {
+        "default": "claude-sonnet-4-6-20250627",
+        "models": [
+            "claude-opus-4-6-20250627",
+            "claude-sonnet-4-6-20250627",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-20250514",
+            "claude-sonnet-4-20250514",
+        ],
+    },
+    "openai-codex": {
+        "default": "gpt-5.4-mini",
+        "models": ["gpt-5.4-mini", "gpt-5.4", "o3", "o4-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"],
+    },
+    "deepseek": {
+        "default": "deepseek-r1",
+        "models": ["deepseek-r1", "deepseek-chat", "deepseek-coder"],
+    },
+    "copilot": {
+        "default": "claude-sonnet-4-6-20250627",
+        "models": ["claude-sonnet-4-6-20250627", "claude-opus-4-6-20250627", "gpt-4.1", "o4-mini"],
+    },
+    "copilot-acp": {
+        "default": "claude-sonnet-4-6-20250627",
+        "models": ["claude-sonnet-4-6-20250627", "claude-opus-4-6-20250627", "gpt-4.1", "o4-mini"],
+    },
+    "nous": {
+        "default": "hermes-3-llama-3.1-405b",
+        "models": ["hermes-3-llama-3.1-405b", "hermes-3-llama-3.1-70b", "deephermes-3-llama-3-8b"],
+    },
+    "zai": {
+        "default": "glm-4-plus",
+        "models": ["glm-4-plus", "glm-4", "glm-4-flash"],
+    },
+    "kimi-coding": {
+        "default": "kimi-k2",
+        "models": ["kimi-k2", "moonshot-v1-128k", "moonshot-v1-32k"],
+    },
+    "minimax": {
+        "default": "MiniMax-M1",
+        "models": ["MiniMax-M1", "MiniMax-Text-01"],
+    },
+}
+
+def list_providers() -> list:
+    """List all known providers with their configuration status and models."""
+    import os
+    from pathlib import Path
+    from dotenv import load_dotenv
+    load_dotenv(Path.home() / ".hermes" / ".env")
+    _cli = str(HERMES_DIR / "hermes_cli")
+    if _cli not in sys.path: sys.path.insert(0, _cli)
+    from auth import PROVIDER_REGISTRY
+    results = []
+    for pid, p in PROVIDER_REGISTRY.items():
+        has_key = False
+        if hasattr(p, "api_key_env_vars") and p.api_key_env_vars:
+            has_key = any(os.environ.get(v) for v in p.api_key_env_vars)
+        elif p.auth_type in ("oauth_device_code", "oauth_external", "external_process"):
+            has_key = True
+        pm = PROVIDER_MODELS.get(pid, {})
+        results.append({
+            "id": pid,
+            "name": p.name,
+            "configured": has_key,
+            "base_url": getattr(p, "inference_base_url", ""),
+            "default_model": pm.get("default", ""),
+            "models": pm.get("models", []),
+        })
+    return results
+
+
 def set_config_value(key: str, value: Any):
     """Update a config value using Hermes CLI helpers."""
-    sys.path.insert(0, str(HERMES_DIR / "hermes_cli"))
+    _cli = str(HERMES_DIR / "hermes_cli")
+    if _cli not in sys.path: sys.path.insert(0, _cli)
     from config import load_config as lc, save_config as sc
     cfg = lc()
     parts = key.split(".")
@@ -202,22 +299,40 @@ class HermesAdapter:
             "base_url": m.get("base_url", None),
         }
 
-    def create_agent(self, session_id: str, callbacks: dict, session_db: Any) -> Any:
+    def create_agent(self, session_id: str, callbacks: dict, session_db: Any, profile: Optional[str] = None) -> Any:
         """
         Create an AIAgent with callbacks wired for event emission.
 
         callbacks dict keys:
             emit(event_type, data_dict) — the bridge's emit function
+        profile: optional profile name (e.g. "talos") to load that profile's config + SOUL
         """
         from run_agent import AIAgent
         import os
 
-        cfg = self.reload_config()
-        api_key = (
-            os.environ.get("OPENROUTER_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or os.environ.get("CODEX_API_KEY")
-        )
+        # Resolve profile config + SOUL without switching HERMES_HOME
+        # (switching HERMES_HOME breaks OAuth auth resolution)
+        profile_soul = None
+        if profile and profile in AGENT_PROFILES:
+            profile_home = get_profile_home(profile)
+            cfg_raw = get_config(profile_home)
+            m = cfg_raw.get("model", {})
+            if isinstance(m, dict):
+                cfg = {
+                    "model": m.get("default", "gpt-5.4-mini"),
+                    "provider": m.get("provider", "openai-codex"),
+                    "base_url": m.get("base_url", None),
+                }
+            else:
+                cfg = {"model": m, "provider": "openai-codex", "base_url": None}
+            # Read SOUL from profile — will be passed as ephemeral_system_prompt
+            soul_path = profile_home / "SOUL.md"
+            if soul_path.exists():
+                profile_soul = soul_path.read_text()
+        else:
+            cfg = self.reload_config()
+
+        # Don't pass explicit api_key — AIAgent resolves via its own auth (OAuth, env, keychain)
 
         emit_fn = callbacks["emit"]
         current_step = {"value": 0}
@@ -292,9 +407,18 @@ class HermesAdapter:
                 "message": message,
             })
 
+        # Combine SOUL + security prompt
+        system_prompt = self.SECURITY_PROMPT
+        if profile_soul:
+            # Override default identity — the profile SOUL IS the agent's identity
+            system_prompt = (
+                "IMPORTANT: Ignore any previous identity instructions. "
+                "Your identity is defined below. You are NOT Hermes.\n\n"
+                + profile_soul + "\n\n" + self.SECURITY_PROMPT
+            )
+
         agent = AIAgent(
-            base_url=cfg["base_url"],
-            api_key=api_key,
+            base_url=cfg.get("base_url"),
             provider=cfg["provider"],
             model=cfg["model"],
             quiet_mode=True,
@@ -302,17 +426,20 @@ class HermesAdapter:
             stream_delta_callback=on_stream_delta,
             step_callback=on_step,
             reasoning_callback=on_reasoning,
-            tool_gen_callback=on_tool_gen,
-            status_callback=on_status,
             session_id=session_id,
             session_db=session_db,
-            ephemeral_system_prompt=self.SECURITY_PROMPT,
+            ephemeral_system_prompt=system_prompt,
+            skip_context_files=bool(profile_soul),
         )
         return agent
 
     def run_conversation(self, agent: Any, message: str, history: list) -> dict:
         """Run agent.run_conversation and return result dict."""
-        return agent.run_conversation(
-            user_message=message,
-            conversation_history=history,
-        )
+        try:
+            return agent.run_conversation(
+                user_message=message,
+                conversation_history=history,
+            )
+        except Exception as e:
+            print(f"[hermes-adapter] run_conversation error: {e}", flush=True)
+            return {"error": str(e), "final_response": f"API call failed after 3 retries: {e}"}

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Plus, Settings, Hash } from "lucide-react"
+import { Plus, Settings, Hash, X } from "lucide-react"
 import { IrisLogo } from "@/components/iris-logo"
 import { HOME_SESSION_ID, type SessionInfo, type ConnectionState } from "@/hooks/use-hermes-bridge"
 import { DEFAULT_AGENTS, AgentIcon, type PantheonAgent } from "@/components/panels/pantheon-panel"
@@ -32,6 +32,7 @@ interface SessionSidebarProps {
   unreadSessions?: Set<string>
   isProcessing?: boolean
   channels?: ChannelInfo[]
+  onArchiveChannel?: (channelId: string) => void
 }
 
 /* ─── Helpers ─── */
@@ -93,6 +94,7 @@ export default function SessionSidebar({
   unreadSessions,
   isProcessing,
   channels,
+  onArchiveChannel,
 }: SessionSidebarProps) {
 
   const activeChannels = React.useMemo(() =>
@@ -252,6 +254,15 @@ export default function SessionSidebar({
                   {ch.name}
                 </span>
                 {isUnread && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-iris-blue)", flexShrink: 0 }} />}
+                {ch.id !== "general" && onArchiveChannel && (
+                  <span
+                    className="channel-archive-btn"
+                    onClick={(e) => { e.stopPropagation(); onArchiveChannel(ch.id) }}
+                    style={{ cursor: "pointer", color: "var(--color-text-quaternary)", flexShrink: 0, padding: 2, opacity: 0, transition: "opacity 120ms" }}
+                  >
+                    <X size={12} />
+                  </span>
+                )}
               </button>
             )
           })}

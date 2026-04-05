@@ -1,0 +1,6 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Wing: single swept shape -->
+  <path d="M32 40 L14 24 L20 28 L12 16 L22 22 L18 10 L28 20 L32 6 L36 20 L46 10 L42 22 L52 16 L44 28 L50 24 L32 40Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none"/>
+  <!-- Staff: vertical line below -->
+  <line x1="32" y1="40" x2="32" y2="58" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

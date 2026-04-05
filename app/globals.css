@@ -6,38 +6,74 @@ html, body {
 }
 
 @theme inline {
-  /* ─── Surface layers ─── */
+  /* Fonts only — colors live on :root so they can be overridden by themes */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ─── Dark mode (default) ─── */
+:root {
   --color-surface: #0C0C0E;
   --color-canvas: #111113;
   --color-elevated: #1A1A1F;
-
-  /* ─── Iris spectrum ─── */
   --color-iris-purple: #FFFFFF;
   --color-iris-blue: #5BA4F6;
   --color-iris-teal: #5BF6C8;
   --color-iris-green: #5BF68A;
   --color-iris-gold: #F6D55B;
   --color-iris-rose: #F65B8A;
-
-  /* ─── Status ─── */
   --color-status-success: #34C759;
   --color-status-error: #EF4444;
   --color-status-warning: #F59E0B;
-
-  /* ─── Text hierarchy ─── */
   --color-text-primary: rgba(255, 255, 255, 0.88);
   --color-text-secondary: rgba(255, 255, 255, 0.55);
   --color-text-tertiary: rgba(255, 255, 255, 0.3);
   --color-text-quaternary: rgba(255, 255, 255, 0.12);
-
-  /* ─── Borders & backgrounds ─── */
+  --color-text-muted: rgba(255, 255, 255, 0.2);
+  --color-text-faint: rgba(255, 255, 255, 0.15);
+  --color-text-ghost: rgba(255, 255, 255, 0.25);
   --color-border-dim: rgba(255, 255, 255, 0.06);
   --color-border-subtle: rgba(255, 255, 255, 0.08);
   --color-active-bg: rgba(255, 255, 255, 0.05);
+  --color-hover-bg: rgba(255, 255, 255, 0.03);
+  --color-button-bg: rgba(255, 255, 255, 0.04);
+  --color-overlay-backdrop: rgba(0, 0, 0, 0.6);
+}
 
-  /* ─── Fonts ─── */
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
+/* ─── Light mode overrides ─── */
+:root[data-theme="light"] {
+  --color-surface: #F5F5F7;
+  --color-canvas: #FFFFFF;
+  --color-elevated: #E8E8ED;
+  --color-text-primary: rgba(0, 0, 0, 0.88);
+  --color-text-secondary: rgba(0, 0, 0, 0.55);
+  --color-text-tertiary: rgba(0, 0, 0, 0.3);
+  --color-text-quaternary: rgba(0, 0, 0, 0.12);
+  --color-text-muted: rgba(0, 0, 0, 0.2);
+  --color-text-faint: rgba(0, 0, 0, 0.15);
+  --color-text-ghost: rgba(0, 0, 0, 0.25);
+  --color-border-dim: rgba(0, 0, 0, 0.08);
+  --color-border-subtle: rgba(0, 0, 0, 0.1);
+  --color-active-bg: rgba(0, 0, 0, 0.05);
+  --color-hover-bg: rgba(0, 0, 0, 0.03);
+  --color-button-bg: rgba(0, 0, 0, 0.04);
+  --color-overlay-backdrop: rgba(0, 0, 0, 0.3);
+  --color-status-success: #28A745;
+  --color-status-error: #DC3545;
+  --color-status-warning: #E8A317;
+  --color-iris-purple: #111113;
+}
+
+/* ─── Frosted glass panels ─── */
+[data-glass="true"] .panel-surface {
+  background: rgba(12, 12, 14, 0.65) !important;
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+}
+[data-theme="light"][data-glass="true"] .panel-surface {
+  background: rgba(245, 245, 247, 0.65) !important;
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
 }
 
 @layer base {
@@ -70,8 +106,9 @@ html, body {
   button, [role="button"], a, input, textarea, select, label {
     touch-action: manipulation;
   }
-  /* Allow text selection on message content */
-  .message-content {
+  /* Allow text selection on message content and entries */
+  .message-content,
+  .message-entry {
     -webkit-user-select: text;
     user-select: text;
   }
@@ -115,11 +152,12 @@ html, body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
+  transition: background 200ms ease;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 /* ─── Streaming pulse ─── */
@@ -327,7 +365,13 @@ html, body {
 
 /* ─── Session row hover ─── */
 .session-row {
-  transition: background 120ms ease;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+.session-row:hover {
+  background: var(--color-hover-bg);
+}
+.session-row:hover .channel-archive-btn {
+  opacity: 1 !important;
 }
 
 /* ─── Composer input ─── */
@@ -405,10 +449,26 @@ html, body {
 
 /* ─── Approval action hover ─── */
 .approve-action {
-  transition: opacity 150ms ease;
+  transition: opacity 150ms ease, transform 100ms ease, background 150ms ease;
 }
 .approve-action:hover {
-  opacity: 0.8;
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+.approve-action:active {
+  transform: scale(0.97);
+}
+
+/* ─── Tool call hover ─── */
+.activity-entry button {
+  transition: background 120ms ease;
+  border-radius: 4px;
+  margin: 0 -4px;
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+}
+.activity-entry button:hover {
+  background: var(--color-hover-bg);
 }
 
 /* ─── New session button ─── */
@@ -422,10 +482,43 @@ html, body {
 
 /* ─── Iris gradient text utility ─── */
 .iris-gradient-text {
-  background: linear-gradient(135deg, rgba(255,255,255,0.7), #5BA4F6, #5BF6C8);
+  background: linear-gradient(90deg, #FF6B9D, #F5C842, #34C759, #5BA4F6, #A855F7, #FF6B9D);
+  background-size: 200% 100%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  animation: iris-rainbow-shift 3s ease-in-out infinite;
+}
+
+@keyframes iris-rainbow-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* ─── Iris rainbow divider bars ─── */
+.iris-rainbow-bar {
+  background: linear-gradient(90deg, #FF6B9D, #F5C842, #34C759, #5BA4F6, #A855F7);
+  background-size: 200% 100%;
+  animation: iris-rainbow-shift 3s ease-in-out infinite;
+  border-radius: 1px;
+  opacity: 0.6;
+}
+
+/* ─── Iris eye rainbow — SVG masked with animated gradient fill ─── */
+.iris-eye-rainbow {
+  filter: drop-shadow(0 0 8px rgba(255,107,157,0.5)) drop-shadow(0 0 16px rgba(91,164,246,0.3));
+  animation: iris-eye-glow 4s ease-in-out infinite;
+}
+
+.iris-rainbow-fill {
+  animation: iris-rainbow-shift 3s ease-in-out infinite;
+}
+
+@keyframes iris-eye-glow {
+  0%, 100% { filter: drop-shadow(0 0 10px rgba(255,107,157,0.6)) drop-shadow(0 0 20px rgba(168,85,247,0.3)); }
+  33% { filter: drop-shadow(0 0 10px rgba(245,200,66,0.6)) drop-shadow(0 0 20px rgba(52,199,89,0.3)); }
+  66% { filter: drop-shadow(0 0 10px rgba(91,164,246,0.6)) drop-shadow(0 0 20px rgba(255,107,157,0.3)); }
 }
 
 /* ─── Iris progress bar ─── */
@@ -528,4 +621,9 @@ html, body {
 
 .home-enter {
   animation: home-fade-in 0.4s ease-out;
+}
+
+/* ─── Message reaction bar — show on hover ─── */
+.message-entry:hover .reaction-bar {
+  opacity: 1 !important;
 }

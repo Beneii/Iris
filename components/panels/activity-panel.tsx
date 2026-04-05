@@ -59,10 +59,10 @@ function StatusSection({ isProcessing, connectionState, agentName, contextPressu
       : "idle"
 
   const statusLabel = { offline: "Offline", working: "Working", idle: "Ready" }[status]
-  const statusColor = { offline: "rgba(239,68,68,0.6)", working: "rgba(255,255,255,0.7)", idle: "rgba(52,199,89,0.6)" }[status]
+  const statusColor = { offline: "var(--color-status-error)", working: "var(--color-text-secondary)", idle: "var(--color-status-success)" }[status]
 
   return (
-    <div style={{ padding: "12px 8px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+    <div style={{ padding: "12px 8px", borderBottom: "1px solid var(--color-button-bg)" }}>
       {/* Agent status */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <div style={{ position: "relative" }}>
@@ -70,13 +70,13 @@ function StatusSection({ isProcessing, connectionState, agentName, contextPressu
           {status === "working" && (
             <div style={{
               position: "absolute", inset: -3, borderRadius: "50%",
-              border: "1.5px solid rgba(255,255,255,0.2)",
+              border: "1.5px solid var(--color-text-muted)",
               animation: "preparing-spin 2s linear infinite",
             }} />
           )}
         </div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, fontWeight: 500, color: "rgba(255,255,255,0.7)" }}>{agentName}</div>
+          <div style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-secondary)" }}>{agentName}</div>
           <div style={{ fontSize: 10, color: statusColor, display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ width: 4, height: 4, borderRadius: "50%", background: statusColor, flexShrink: 0 }} />
             {statusLabel}
@@ -88,13 +88,13 @@ function StatusSection({ isProcessing, connectionState, agentName, contextPressu
       {contextPressure > 0 && (
         <div style={{ marginTop: 4 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.2)", letterSpacing: "0.05em", textTransform: "uppercase" as const }}>Context</span>
-            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.15)", fontFamily: "var(--font-geist-mono), monospace" }}>{contextPressure}%</span>
+            <span style={{ fontSize: 9, color: "var(--color-text-muted)", letterSpacing: "0.05em", textTransform: "uppercase" as const }}>Context</span>
+            <span style={{ fontSize: 9, color: "var(--color-text-faint)", fontFamily: "var(--font-geist-mono), monospace" }}>{contextPressure}%</span>
           </div>
-          <div style={{ width: "100%", height: 2, borderRadius: 1, background: "rgba(255,255,255,0.04)", overflow: "hidden" }}>
+          <div style={{ width: "100%", height: 2, borderRadius: 1, background: "var(--color-button-bg)", overflow: "hidden" }}>
             <div className="pressure-bar-fill" style={{
               width: `${contextPressure}%`, height: "100%", borderRadius: 1,
-              background: contextPressure > 80 ? "rgba(239,68,68,0.5)" : "rgba(255,255,255,0.2)",
+              background: contextPressure > 80 ? "var(--color-status-error)" : "var(--color-text-muted)",
             }} />
           </div>
         </div>
@@ -117,21 +117,21 @@ function TaskItem({ entry }: { entry: ActivityEntryType }) {
       {/* Status indicator */}
       <div style={{ width: 16, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
         {isActive ? (
-          <Loader2 size={12} strokeWidth={2} style={{ color: "rgba(255,255,255,0.4)", animation: "preparing-spin 1.5s linear infinite" }} />
+          <Loader2 size={12} strokeWidth={2} style={{ color: "var(--color-text-tertiary)", animation: "preparing-spin 1.5s linear infinite" }} />
         ) : isError ? (
-          <XCircle size={12} strokeWidth={2} style={{ color: "rgba(239,68,68,0.4)" }} />
+          <XCircle size={12} strokeWidth={2} style={{ color: "var(--color-status-error)" }} />
         ) : entry.status === "success" ? (
-          <CheckCircle2 size={12} strokeWidth={2} style={{ color: "rgba(255,255,255,0.15)" }} />
+          <CheckCircle2 size={12} strokeWidth={2} style={{ color: "var(--color-text-faint)" }} />
         ) : (
-          <Circle size={12} strokeWidth={2} style={{ color: "rgba(255,255,255,0.08)" }} />
+          <Circle size={12} strokeWidth={2} style={{ color: "var(--color-border-subtle)" }} />
         )}
       </div>
 
       {/* Icon + name */}
-      <Icon size={11} strokeWidth={1.5} style={{ color: "rgba(255,255,255,0.15)", flexShrink: 0 }} />
+      <Icon size={11} strokeWidth={1.5} style={{ color: "var(--color-text-faint)", flexShrink: 0 }} />
       <span style={{
         fontSize: 11, fontWeight: isActive ? 500 : 400,
-        color: isActive ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.25)",
+        color: isActive ? "var(--color-text-secondary)" : "var(--color-text-ghost)",
         overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const,
         flex: 1,
       }}>
@@ -139,7 +139,7 @@ function TaskItem({ entry }: { entry: ActivityEntryType }) {
       </span>
 
       {/* Timestamp */}
-      <span style={{ fontSize: 9, color: "rgba(255,255,255,0.08)", fontFamily: "var(--font-geist-mono), monospace", flexShrink: 0 }}>
+      <span style={{ fontSize: 9, color: "var(--color-border-subtle)", fontFamily: "var(--font-geist-mono), monospace", flexShrink: 0 }}>
         {entry.timestamp}
       </span>
     </div>
@@ -153,23 +153,23 @@ function SubAgentCard({ entry }: { entry: ActivityEntryType }) {
   return (
     <div style={{
       padding: "8px 10px", borderRadius: 8,
-      background: "rgba(255,255,255,0.02)",
-      border: `1px solid ${isActive ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.03)"}`,
+      background: "var(--color-hover-bg)",
+      border: `1px solid ${isActive ? "var(--color-border-dim)" : "var(--color-hover-bg)"}`,
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-        <GitFork size={11} strokeWidth={1.5} style={{ color: "rgba(255,255,255,0.3)" }} />
-        <span style={{ fontSize: 11, fontWeight: 500, color: "rgba(255,255,255,0.5)" }}>
+        <GitFork size={11} strokeWidth={1.5} style={{ color: "var(--color-text-tertiary)" }} />
+        <span style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-secondary)" }}>
           Sub-agent
         </span>
         {isActive && (
-          <Loader2 size={10} strokeWidth={2} style={{ color: "rgba(255,255,255,0.3)", animation: "preparing-spin 1.5s linear infinite", marginLeft: "auto" }} />
+          <Loader2 size={10} strokeWidth={2} style={{ color: "var(--color-text-tertiary)", animation: "preparing-spin 1.5s linear infinite", marginLeft: "auto" }} />
         )}
         {entry.status === "success" && (
-          <CheckCircle2 size={10} strokeWidth={2} style={{ color: "rgba(255,255,255,0.15)", marginLeft: "auto" }} />
+          <CheckCircle2 size={10} strokeWidth={2} style={{ color: "var(--color-text-faint)", marginLeft: "auto" }} />
         )}
       </div>
       {entry.summary && (
-        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", lineHeight: 1.4 }}>
+        <span style={{ fontSize: 10, color: "var(--color-text-muted)", lineHeight: 1.4 }}>
           {entry.summary}
         </span>
       )}
@@ -184,7 +184,7 @@ function ScheduledSection({ jobs }: { jobs: CronJob[] }) {
 
   return (
     <div style={{ padding: "8px 8px" }}>
-      <div style={{ fontSize: 9, fontWeight: 500, color: "rgba(255,255,255,0.15)", letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 6, paddingLeft: 2 }}>
+      <div style={{ fontSize: 9, fontWeight: 500, color: "var(--color-text-faint)", letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 6, paddingLeft: 2 }}>
         Scheduled
       </div>
       {active.slice(0, 5).map((job) => (
@@ -192,14 +192,14 @@ function ScheduledSection({ jobs }: { jobs: CronJob[] }) {
           display: "flex", alignItems: "center", gap: 6,
           padding: "4px 2px",
         }}>
-          <Clock size={10} strokeWidth={1.5} style={{ color: "rgba(255,255,255,0.12)", flexShrink: 0 }} />
+          <Clock size={10} strokeWidth={1.5} style={{ color: "var(--color-text-quaternary)", flexShrink: 0 }} />
           <span style={{
-            fontSize: 10, color: "rgba(255,255,255,0.25)",
+            fontSize: 10, color: "var(--color-text-ghost)",
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, flex: 1,
           }}>
             {job.name || job.prompt.slice(0, 30)}
           </span>
-          <span style={{ fontSize: 9, color: "rgba(255,255,255,0.08)", fontFamily: "var(--font-geist-mono), monospace", flexShrink: 0 }}>
+          <span style={{ fontSize: 9, color: "var(--color-border-subtle)", fontFamily: "var(--font-geist-mono), monospace", flexShrink: 0 }}>
             {job.schedule_display}
           </span>
         </div>
@@ -232,7 +232,7 @@ export default function ActivityPanel({ activities, isProcessing, contextPressur
       >
         <span style={{
           fontSize: 11, fontWeight: 500, letterSpacing: "0.08em",
-          color: "rgba(255,255,255,0.3)", textTransform: "uppercase" as const,
+          color: "var(--color-text-tertiary)", textTransform: "uppercase" as const,
         }}>
           Status
         </span>
@@ -250,8 +250,8 @@ export default function ActivityPanel({ activities, isProcessing, contextPressur
 
         {/* Active sub-agents */}
         {subAgents.filter((a) => a.status === "running" || a.status === "preparing").length > 0 && (
-          <div style={{ padding: "8px 8px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-            <div style={{ fontSize: 9, fontWeight: 500, color: "rgba(255,255,255,0.15)", letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 6, paddingLeft: 2 }}>
+          <div style={{ padding: "8px 8px", borderBottom: "1px solid var(--color-button-bg)" }}>
+            <div style={{ fontSize: 9, fontWeight: 500, color: "var(--color-text-faint)", letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 6, paddingLeft: 2 }}>
               Sub-agents
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -264,8 +264,8 @@ export default function ActivityPanel({ activities, isProcessing, contextPressur
 
         {/* Active tasks (live checklist) */}
         {activeTasks.length > 0 && (
-          <div style={{ padding: "8px 4px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-            <div style={{ fontSize: 9, fontWeight: 500, color: "rgba(255,255,255,0.15)", letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 4, paddingLeft: 10 }}>
+          <div style={{ padding: "8px 4px", borderBottom: "1px solid var(--color-button-bg)" }}>
+            <div style={{ fontSize: 9, fontWeight: 500, color: "var(--color-text-faint)", letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 4, paddingLeft: 10 }}>
               Working on
             </div>
             {activeTasks.map((a) => (
@@ -276,8 +276,8 @@ export default function ActivityPanel({ activities, isProcessing, contextPressur
 
         {/* Recent completions */}
         {recentTasks.length > 0 && (
-          <div style={{ padding: "8px 4px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-            <div style={{ fontSize: 9, fontWeight: 500, color: "rgba(255,255,255,0.15)", letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 4, paddingLeft: 10 }}>
+          <div style={{ padding: "8px 4px", borderBottom: "1px solid var(--color-button-bg)" }}>
+            <div style={{ fontSize: 9, fontWeight: 500, color: "var(--color-text-faint)", letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 4, paddingLeft: 10 }}>
               Recent
             </div>
             {recentTasks.map((a) => (
@@ -295,7 +295,7 @@ export default function ActivityPanel({ activities, isProcessing, contextPressur
             <div style={{ opacity: 0.08 }}>
               <IrisLogo size={28} />
             </div>
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.12)" }}>
+            <span style={{ fontSize: 11, color: "var(--color-text-quaternary)" }}>
               Waiting for activity
             </span>
           </div>

@@ -1,7 +1,10 @@
 "use client"
 
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useMessageDedup } from "@/hooks/use-message-dedup"
 import {
+  AGENT_IDS,
+  HOME_SESSION_ID,
   sessionIdToTarget,
   targetToThreadKey,
   type ActivityEntry,
@@ -44,11 +47,44 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
   const [contextPressure, setContextPressure] = useState(0)
   const [currentStep, setCurrentStep] = useState(0)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [processingAgents, setProcessingAgents] = useState<Set<string>>(new Set())
   const streamingMsgRef = useRef<string | null>(null)
+  // Multi-stream support: maps agentId → messageId for concurrent channel responses
+  const streamingByAgent = useRef<Record<string, string>>({})
   const reasoningRef = useRef("")
+  const { trackLocalSend, isLocalEcho, isAssistantDuplicate } = useMessageDedup()
+  // Legacy refs kept for backward compat during transition (will be removed in cleanup pass)
   const localMessageIds = useRef<Set<string>>(new Set())
   const recentMessageIds = useRef<Set<string>>(new Set())
   const assistantDedupRef = useRef<Record<string, number>>({})
+
+  // Per-session message cache — survives session switches AND app restarts via localStorage
+  const messagesBySession = useRef<Record<string, HermesMessage[]>>({})
+  const cacheInitialized = useRef(false)
+  if (!cacheInitialized.current && typeof window !== "undefined") {
+    cacheInitialized.current = true
+    try {
+      const saved = localStorage.getItem("iris_message_cache")
+      if (saved) messagesBySession.current = JSON.parse(saved)
+    } catch { /* ignore */ }
+  }
+
+  // Sync messages to cache whenever they change (only non-empty, non-streaming)
+  useEffect(() => {
+    const sessionId = getActiveSessionId()
+    if (sessionId && messages.length > 0 && !messages.some(m => m.status === "streaming")) {
+      messagesBySession.current[sessionId] = messages
+      // Persist to localStorage (keep last 10 sessions to avoid bloat)
+      try {
+        const keys = Object.keys(messagesBySession.current)
+        if (keys.length > 10) {
+          const oldest = keys.slice(0, keys.length - 10)
+          for (const k of oldest) delete messagesBySession.current[k]
+        }
+        localStorage.setItem("iris_message_cache", JSON.stringify(messagesBySession.current))
+      } catch { /* quota exceeded — safe to ignore */ }
+    }
+  }, [messages, getActiveSessionId])
 
   const upsertToolInMessage = useCallback((message: HermesMessage, toolCall: ToolCall, replace?: { name: string; status: ToolStatus }) => {
     const toolCalls = [...(message.toolCalls || [])]
@@ -90,7 +126,9 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
     const sessionId = getActiveSessionId()
     const trimmed = text.trim()
 
-    if (isProcessing) return
+    // In channels, allow sending even while processing (queue handles sequencing)
+    const isChannel = !AGENT_IDS.has(sessionId) && sessionId !== HOME_SESSION_ID
+    if (isProcessing && !isChannel) return
     const ts = Math.floor(Date.now() / 1000)
     localMessageIds.current.add(`${trimmed}-${ts}`)
 
@@ -112,8 +150,9 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
 
   const sendMessageWithAttachments = useCallback(
     (text: string, attachments: { data: string; mime: string }[], displayImages?: string[]) => {
-      if (isProcessing) return
       const sessionId = getActiveSessionId()
+      const isChannel = !AGENT_IDS.has(sessionId) && sessionId !== HOME_SESSION_ID
+      if (isProcessing && !isChannel) return
       const trimmed = text.trim()
       const ts = Math.floor(Date.now() / 1000)
       localMessageIds.current.add(`${trimmed}-${ts}`)
@@ -163,13 +202,20 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
   }, [])
 
   const resetConversation = useCallback(() => {
-    setMessages([])
+    // Cache current messages before clearing
+    const currentSessionId = getActiveSessionId()
+    setMessages(prev => {
+      if (prev.length > 0 && currentSessionId) {
+        messagesBySession.current[currentSessionId] = prev
+      }
+      return []
+    })
     setIsProcessing(false)
     setCurrentStep(0)
     setContextPressure(0)
     streamingMsgRef.current = null
     reasoningRef.current = ""
-  }, [])
+  }, [getActiveSessionId])
 
   const handleConnectionReady = useCallback(
     (event: BridgeEvent) => {
@@ -236,15 +282,24 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
         }
 
         case "response.started": {
-          const msgId = `iris-${Date.now()}`
+          const startedSessionId = event.session_id as string | undefined
+          if (startedSessionId && startedSessionId !== getActiveSessionId()) return true
+          const agentId = (event.agentId as string) || undefined
+          const msgId = `iris-${Date.now()}-${agentId || "default"}`
+
+          // Track streaming: single ref for DMs, per-agent map for channels
+          if (agentId) {
+            streamingByAgent.current[agentId] = msgId
+          }
           streamingMsgRef.current = msgId
           reasoningRef.current = ""
           setCurrentStep(0)
           setIsProcessing(true)
+          if (agentId) {
+            setProcessingAgents(prev => { const next = new Set(prev); next.add(agentId); return next })
+          }
           setMessages((prev) => [
-            ...prev.map((message) =>
-              message.status === "streaming" ? { ...finishAllTools(message), status: "ready" as const } : message,
-            ),
+            ...prev,
             {
               id: msgId,
               role: "assistant",
@@ -252,16 +307,21 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
               timestamp: now(),
               status: "streaming",
               segments: [],
-              agentId: (event.agentId as string) || undefined,
+              agentId,
             },
           ])
           return true
         }
 
         case "message.delta": {
+          const deltaSessionId = event.session_id as string | undefined
+          if (deltaSessionId && deltaSessionId !== getActiveSessionId()) return true
           const text = event.text as string
-          if (!text || !streamingMsgRef.current) return true
-          const currentStreamId = streamingMsgRef.current
+          if (!text) return true
+          // Route delta to the correct streaming message by agentId
+          const deltaAgent = (event.agentId as string) || undefined
+          const currentStreamId = (deltaAgent && streamingByAgent.current[deltaAgent]) || streamingMsgRef.current
+          if (!currentStreamId) return true
           setMessages((prev) =>
             prev.map((message) => {
               if (message.id !== currentStreamId) return message
@@ -319,7 +379,19 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
         }
 
         case "response.completed": {
-          setIsProcessing(false)
+          const completedAgent = (event.agentId as string) || undefined
+          // Only clear isProcessing when no agents are left processing
+          if (completedAgent) {
+            setProcessingAgents(prev => {
+              const next = new Set(prev)
+              next.delete(completedAgent)
+              if (next.size === 0) setIsProcessing(false)
+              return next
+            })
+          } else {
+            setIsProcessing(false)
+            setProcessingAgents(new Set())
+          }
           updateActivities((prev) =>
             prev.map((activity) =>
               activity.status === "running" || activity.status === "preparing"
@@ -332,8 +404,18 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
           if (completedSessionId && completedSessionId !== getActiveSessionId() && finalResponse) {
             markSessionUnread(completedSessionId)
           }
-          if (streamingMsgRef.current) {
-            const currentStreamId = streamingMsgRef.current
+          // Clean up streaming state for this agent
+          const completedStreamId = (completedAgent && streamingByAgent.current[completedAgent]) || streamingMsgRef.current
+          if (completedAgent) {
+            delete streamingByAgent.current[completedAgent]
+          }
+          // Clear single ref only if it matches or no agents left streaming
+          if (Object.keys(streamingByAgent.current).length === 0) {
+            streamingMsgRef.current = null
+            reasoningRef.current = ""
+          }
+          if (completedStreamId) {
+            const currentStreamId = completedStreamId
             setMessages((prev) =>
               prev.map((message) => {
                 if (message.id === currentStreamId) {
@@ -345,9 +427,8 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
                 return message
               }),
             )
-        } else if (finalResponse) {
-          const targetSessionId = event.session_id as string | undefined
-          const dedupKey = targetSessionId ? `${targetSessionId}:${finalResponse}` : finalResponse
+        } else if (finalResponse && (!completedSessionId || completedSessionId === getActiveSessionId())) {
+          const dedupKey = completedSessionId ? `${completedSessionId}:${finalResponse}` : finalResponse
           const nowTs = Date.now()
           const lastSeen = assistantDedupRef.current[dedupKey]
           if (lastSeen && nowTs - lastSeen < 8000) {
@@ -379,12 +460,14 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
               ]
             })
           }
-          streamingMsgRef.current = null
-          reasoningRef.current = ""
           return true
         }
 
         case "response.error": {
+          const errorAgent = (event.agentId as string) || undefined
+          if (errorAgent) {
+            setProcessingAgents(prev => { const next = new Set(prev); next.delete(errorAgent); return next })
+          }
           setIsProcessing(false)
           updateActivities((prev) =>
             prev.map((activity) =>
@@ -437,6 +520,7 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
         }
 
         case "tool.preparing": {
+          if ((event.session_id as string) && (event.session_id as string) !== getActiveSessionId()) return true
           const toolName = event.tool_name as string
           const prepId = `prep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
           updateActivities((prev) => {
@@ -468,6 +552,7 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
         }
 
         case "tool.started": {
+          if ((event.session_id as string) && (event.session_id as string) !== getActiveSessionId()) return true
           const toolId = event.tool_id as string
           const toolName = event.tool_name as string
           const args = event.args as Record<string, unknown> | string | undefined
@@ -652,6 +737,24 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
           return true
         }
 
+        case "agent.delegated": {
+          const delegateSessionId = event.session_id as string
+          if (delegateSessionId !== getActiveSessionId()) return true
+          const fromAgent = event.from_agent as string
+          const toAgent = event.to_agent as string
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `delegate-${Date.now()}`,
+              role: "divider",
+              content: `${fromAgent} delegated to ${toAgent}`,
+              timestamp: now(),
+              status: "ready",
+            },
+          ])
+          return true
+        }
+
         case "hermes.message": {
           const sessionId = event.session_id as string
           const text = event.text as string
@@ -712,26 +815,40 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
           setActivitiesForSession(resumedSessionId, restoredActivities as ActivityEntry[])
           setContextPressure(0)
           setCurrentStep(0)
-          const restoredMessages: HermesMessage[] = historyMsgs.map((msg, idx) => ({
-            id: `history-${idx}-${Date.now()}`,
-            role: msg.role as "user" | "assistant" | "divider",
-            content: msg.content || "",
-            timestamp: msg.timestamp ? now() : "",
-            status: "ready",
-            agentId: msg.agentId,
-          }))
+          // Build restored messages from server history, fall back to local cache
+          let restoredMessages: HermesMessage[]
+          if (historyMsgs.length > 0) {
+            restoredMessages = historyMsgs.map((msg, idx) => ({
+              id: `history-${idx}-${Date.now()}`,
+              role: msg.role as "user" | "assistant" | "divider",
+              content: msg.content || "",
+              timestamp: msg.timestamp ? now() : "",
+              status: "ready" as const,
+              agentId: msg.agentId,
+            }))
+          } else {
+            // Use cached messages if server returned empty (faster session switch)
+            restoredMessages = messagesBySession.current[resumedSessionId] || []
+          }
+          // Update cache with latest
+          if (restoredMessages.length > 0) {
+            messagesBySession.current[resumedSessionId] = restoredMessages
+          }
           const runningSessions = (event.running_sessions as string[]) || []
-          const isRunning = runningSessions.includes(resumedSessionId)
+          const processingAgentsList = (event.processing_agents as string[]) || []
+          const isRunning = runningSessions.includes(resumedSessionId) || processingAgentsList.length > 0
           if (isRunning) {
             const placeholderId = streamingMsgRef.current || `reconnect-${Date.now()}`
             streamingMsgRef.current = placeholderId
             setIsProcessing(true)
+            setProcessingAgents(new Set(processingAgentsList))
             setMessages([
               ...restoredMessages,
-              { id: placeholderId, role: "assistant", content: "", timestamp: now(), status: "streaming" },
+              { id: placeholderId, role: "assistant", content: "", timestamp: now(), status: "streaming", agentId: processingAgentsList[0] },
             ])
           } else {
             setIsProcessing(false)
+            setProcessingAgents(new Set())
             streamingMsgRef.current = null
             reasoningRef.current = ""
             setMessages(restoredMessages)
@@ -764,6 +881,7 @@ export function useBridgeMessages({ sendAction, sessions }: UseBridgeMessagesOpt
     contextPressure,
     currentStep,
     isProcessing,
+    processingAgents,
     sendMessage,
     sendMessageWithAttachments,
     cancelResponse,

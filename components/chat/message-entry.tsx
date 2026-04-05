@@ -8,6 +8,7 @@ import { hapticLight, hapticMedium } from "@/lib/haptics"
 import { markdownComponents } from "@/lib/markdown-components"
 import { IMAGE_TOOL_RE, findImageInArgs } from "@/lib/image-utils"
 import { truncateJsonValues } from "@/lib/utils"
+import { IrisLogo } from "@/components/iris-logo"
 import type {
   HermesMessage,
   MessageSegment,
@@ -118,7 +119,7 @@ export function SkeletonLoading() {
 }
 
 /* ─── Reasoning Trace ─── */
-function ReasoningTrace({
+const ReasoningTrace = React.memo(function ReasoningTrace({
   messageId,
   reasoning,
   isStreaming,
@@ -194,10 +195,10 @@ function ReasoningTrace({
       )}
     </div>
   )
-}
+})
 
 /* ─── Inline Tool Call (compact: icon + name) ─── */
-function InlineToolCall({
+const InlineToolCall = React.memo(function InlineToolCall({
   toolCall,
   messageCompleted,
 }: {
@@ -330,7 +331,7 @@ function InlineToolCall({
       )}
     </div>
   )
-}
+})
 
 /* ─── Approval Inline ─── */
 export function ApprovalInline({
@@ -582,18 +583,20 @@ function MessageEntryInner({
         className="message-entry"
         style={{
           display: "flex",
-          justifyContent: "flex-end",
+          flexDirection: "column",
+          gap: 2,
+          paddingRight: 10,
+          borderRight: "1px solid rgba(255,255,255,0.2)",
+          marginRight: 2,
+          alignItems: "flex-end",
         }}
       >
-        <div
-          style={{
-            maxWidth: "85%",
-            background: "var(--color-border-dim)",
-            borderRadius: 16,
-            borderBottomRightRadius: 4,
-            padding: "6px 12px",
-          }}
-        >
+        {showHeader && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.7)", letterSpacing: "0.01em" }}>You</span>
+          </div>
+        )}
+        <div style={{ maxWidth: "100%", textAlign: "right" }}>
           {contentBlock}
         </div>
       </div>
@@ -651,6 +654,47 @@ function MessageEntryInner({
 const MessageEntry = React.memo(MessageEntryInner)
 export default MessageEntry
 
+/* ─── Collapsible Message (for council) ─── */
+function CollapsibleMessage({ content, message, isError }: { content: string; message: HermesMessage; isError: boolean }) {
+  const [expanded, setExpanded] = React.useState(false)
+  // First line = verdict + short reason
+  const firstLine = content.split("\n").filter(l => l.trim())[0] || content.slice(0, 100)
+  const hasMore = content.trim().length > firstLine.length + 10
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 14, fontWeight: 500, lineHeight: 1.6, color: isError ? "rgba(239,68,68,0.6)" : "var(--color-text-primary)" }}>
+          {firstLine}
+        </span>
+        {hasMore && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
+            style={{
+              background: "transparent", border: "none", cursor: "pointer",
+              padding: "2px 4px", borderRadius: 3, display: "flex", alignItems: "center",
+              color: "var(--color-text-quaternary)",
+            }}
+          >
+            <ChevronDown
+              size={12}
+              style={{
+                transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+                transition: "transform 200ms ease",
+              }}
+            />
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="reasoning-content" style={{ marginTop: 4 }}>
+          <MessageContent message={message} isUser={false} isError={isError} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ─── Grouping helpers ─── */
 interface MessageGroup {
   senderId: string
@@ -687,6 +731,7 @@ function withinTwoMinutes(a: string, b: string): boolean {
 function groupMessages(messages: HermesMessage[]): MessageGroup[] {
   const groups: MessageGroup[] = []
   for (const msg of messages) {
+    if (!msg || !msg.role) continue  // Skip malformed messages
     const senderKey = msg.role === "assistant" ? `assistant:${msg.agentId || "hermes"}` : msg.role
     const last = groups[groups.length - 1]
     if (
@@ -710,10 +755,14 @@ export const MessageList = React.memo(function MessageList({
   messages,
   agentName,
   agentColor,
+  onReaction,
+  collapsedByDefault = false,
 }: {
   messages: HermesMessage[]
   agentName: string
   agentColor?: string
+  onReaction?: (messageId: string, reaction: "thumbsup" | "thumbsdown" | null) => void
+  collapsedByDefault?: boolean
 }) {
   const groups = groupMessages(messages)
 
@@ -746,25 +795,36 @@ export const MessageList = React.memo(function MessageList({
               const msgIsError = msg.status === "error"
 
               if (isUser) {
-                // User messages: right-aligned bubbles, no label
+                // User messages: right-aligned, accent rail on right, mirrors agent style
                 return (
                   <div
                     key={msg.id}
                     className="message-entry"
                     style={{
                       display: "flex",
-                      justifyContent: "flex-end",
+                      flexDirection: "column",
+                      gap: 2,
+                      paddingRight: 10,
+                      borderRight: "1px solid rgba(255,255,255,0.2)",
+                      marginRight: 2,
+                      alignItems: "flex-end",
                     }}
                   >
-                    <div
-                      style={{
-                        maxWidth: "85%",
-                        background: "var(--color-border-dim)",
-                        borderRadius: 16,
-                        borderBottomRightRadius: mi === group.messages.length - 1 ? 4 : 16,
-                        padding: "10px 14px",
-                      }}
-                    >
+                    {showHeader && (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          marginBottom: 2,
+                        }}
+                      >
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.7)", letterSpacing: "0.01em" }}>
+                          You
+                        </span>
+                      </div>
+                    )}
+                    <div style={{ maxWidth: "100%", textAlign: "right" }}>
                       <MessageContent
                         message={msg}
                         isUser={true}
@@ -776,9 +836,64 @@ export const MessageList = React.memo(function MessageList({
               }
 
               const msgAgent = msg.agentId ? DEFAULT_AGENTS.find(a => a.id === msg.agentId) : null
+              const isIris = msg.agentId === "iris"
               const accent = msgIsError
                 ? "rgba(239,68,68,0.45)"
+                : isIris ? "#FF6B9D"
                 : (msgAgent?.color || agentColor || "var(--color-text-secondary)")
+
+              // Iris messages: centered with rainbow divider + eye
+              if (isIris) {
+                return (
+                  <div
+                    key={msg.id}
+                    className="message-entry"
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 6,
+                      margin: "16px 0",
+                    }}
+                  >
+                    {/* Rainbow divider + centered eye */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%" }}>
+                      <div className="iris-rainbow-bar" style={{ flex: 1, height: 1 }} />
+                      <div className="iris-eye-rainbow" style={{ position: "relative", width: 48, height: 29 }}>
+                        {/* Animated eye with rainbow overlay */}
+                        <IrisLogo size={48} status="idle" />
+                        {/* Rainbow gradient overlay masked to eye shape */}
+                        <div style={{
+                          position: "absolute", inset: 0,
+                          WebkitMaskImage: "url(/iris-static.svg)",
+                          WebkitMaskSize: "contain",
+                          WebkitMaskRepeat: "no-repeat",
+                          WebkitMaskPosition: "center",
+                          maskImage: "url(/iris-static.svg)",
+                          maskSize: "contain",
+                          maskRepeat: "no-repeat",
+                          maskPosition: "center",
+                          pointerEvents: "none",
+                        }}>
+                          <div className="iris-rainbow-fill" style={{
+                            width: "100%", height: "100%",
+                            background: "linear-gradient(90deg, #FF6B9D, #F5C842, #34C759, #5BA4F6, #A855F7, #FF6B9D)",
+                            backgroundSize: "200% 100%",
+                            opacity: 0.85,
+                          }} />
+                        </div>
+                      </div>
+                      <div className="iris-rainbow-bar" style={{ flex: 1, height: 1 }} />
+                    </div>
+                    {/* Message content centered */}
+                    <div style={{ textAlign: "center", maxWidth: "90%" }}>
+                      <MessageContent message={msg} isUser={false} isError={false} />
+                    </div>
+                    {/* Bottom rainbow bar */}
+                    <div className="iris-rainbow-bar" style={{ width: "60%", height: 1 }} />
+                  </div>
+                )
+              }
 
               // Assistant messages: left-aligned, accent rail per author
               return (
@@ -805,11 +920,11 @@ export const MessageList = React.memo(function MessageList({
                     >
                       <span
                         style={{
-                          fontSize: 11,
-                          fontWeight: 500,
-                          color: isError
-                            ? "rgba(239,68,68,0.5)"
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: isError ? "rgba(239,68,68,0.5)"
                             : (msgAgent?.color || agentColor || "var(--color-text-secondary)"),
+                          letterSpacing: "0.01em",
                         }}
                       >
                         {isError ? "Error" : (msgAgent?.name || agentName)}
@@ -829,11 +944,40 @@ export const MessageList = React.memo(function MessageList({
                     </div>
                   )}
 
-                  <MessageContent
-                    message={msg}
-                    isUser={false}
-                    isError={msgIsError}
-                  />
+                  {collapsedByDefault && msg.status === "ready" && !isIris ? (
+                    <CollapsibleMessage content={msg.content} message={msg} isError={msgIsError} />
+                  ) : (
+                    <MessageContent
+                      message={msg}
+                      isUser={false}
+                      isError={msgIsError}
+                    />
+                  )}
+                  {/* Reaction buttons */}
+                  {msg.status === "ready" && !msgIsError && onReaction && (
+                    <div style={{ display: "flex", gap: 2, marginTop: 4, opacity: msg.reaction ? 1 : 0, transition: "opacity 150ms" }}
+                      className="reaction-bar"
+                    >
+                      <button
+                        onClick={() => onReaction(msg.id, msg.reaction === "thumbsup" ? null : "thumbsup")}
+                        style={{
+                          background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px",
+                          fontSize: 12, borderRadius: 4, opacity: msg.reaction === "thumbsup" ? 1 : 0.4,
+                        }}
+                      >
+                        👍
+                      </button>
+                      <button
+                        onClick={() => onReaction(msg.id, msg.reaction === "thumbsdown" ? null : "thumbsdown")}
+                        style={{
+                          background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px",
+                          fontSize: 12, borderRadius: 4, opacity: msg.reaction === "thumbsdown" ? 1 : 0.4,
+                        }}
+                      >
+                        👎
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             })}

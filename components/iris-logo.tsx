@@ -128,8 +128,18 @@ export function IrisLogo({ size = 24, className, status = "idle" }: IrisLogoProp
 
   const height = size * 0.6
 
+  // Invert colors in light mode (SVGs use hardcoded white)
+  const [isLight, setIsLight] = React.useState(false)
+  React.useEffect(() => {
+    const check = () => setIsLight(document.documentElement.getAttribute("data-theme") === "light")
+    check()
+    const observer = new MutationObserver(check)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+    return () => observer.disconnect()
+  }, [])
+
   return (
-    <div style={{ width: size, height, position: "relative" }} className={className}>
+    <div style={{ width: size, height, position: "relative", filter: isLight ? "invert(1)" : "none" }} className={className}>
       <object
         ref={objARef}
         type="image/svg+xml"

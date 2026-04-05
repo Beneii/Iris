@@ -14,8 +14,11 @@ interface ComposerProps {
   onChange: (value: string) => void
   onSend: () => void
   isProcessing: boolean
+  isChannel?: boolean
   showCommandPalette: boolean
   onCommandPaletteChange: (show: boolean) => void
+  showMentionPicker: boolean
+  onMentionPickerChange: (show: boolean) => void
   onFilesAttached?: (files: File[]) => void
   attachments?: Attachment[]
   onRemoveAttachment?: (index: number) => void
@@ -27,8 +30,11 @@ export default function Composer({
   onChange,
   onSend,
   isProcessing,
+  isChannel = false,
   showCommandPalette,
   onCommandPaletteChange,
+  showMentionPicker,
+  onMentionPickerChange,
   onFilesAttached,
   attachments,
   onRemoveAttachment,
@@ -68,13 +74,23 @@ export default function Composer({
     onChange(next)
     if (next === "/") onCommandPaletteChange(true)
     else if (!next.startsWith("/")) onCommandPaletteChange(false)
+
+    // Detect @mention trigger: look for @ followed by optional word chars at cursor
+    const cursor = e.target.selectionStart ?? next.length
+    const before = next.slice(0, cursor)
+    const mentionMatch = before.match(/(^|[\s])@(\w*)$/)
+    if (mentionMatch) {
+      onMentionPickerChange(true)
+    } else {
+      onMentionPickerChange(false)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (showCommandPalette && (e.key === "Enter" || e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Tab")) return
+    if ((showCommandPalette || showMentionPicker) && (e.key === "Enter" || e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Tab")) return
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      if (value.trim() && !isProcessing) {
+      if (value.trim() && (!isProcessing || isChannel)) {
         textareaRef.current?.blur()
         onSend()
       }
@@ -103,7 +119,7 @@ export default function Composer({
     e.target.value = ""
   }
 
-  const canSend = value.trim().length > 0 && !isProcessing
+  const canSend = value.trim().length > 0 && (!isProcessing || isChannel)
 
   return (
     <div
@@ -114,7 +130,7 @@ export default function Composer({
       style={{
         display: "flex",
         flexDirection: "column",
-        background: "rgba(26, 26, 31, 0.85)",
+        background: "var(--color-elevated)",
         backdropFilter: "blur(20px)",
         WebkitBackdropFilter: "blur(20px)",
         borderRadius: 10,
@@ -127,13 +143,13 @@ export default function Composer({
           {attachments.map((att, i) => (
             <div key={`${att.name}-${i}`} className="attachment-item" style={{ position: "relative", flexShrink: 0 }}>
               {att.type.startsWith("image/") ? (
-                <img src={att.url} alt={att.name} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)" }} />
+                <img src={att.url} alt={att.name} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, border: "1px solid var(--color-border-dim)" }} />
               ) : (
-                <div style={{ padding: "6px 10px", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)", fontSize: 11, color: "rgba(255,255,255,0.55)", whiteSpace: "nowrap", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>{att.name}</div>
+                <div style={{ padding: "6px 10px", borderRadius: 6, background: "var(--color-button-bg)", border: "1px solid var(--color-border-dim)", fontSize: 11, color: "var(--color-text-secondary)", whiteSpace: "nowrap", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>{att.name}</div>
               )}
               {onRemoveAttachment && (
-                <button aria-label={`Remove ${att.name}`} onClick={() => onRemoveAttachment(i)} style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.1)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
-                  <X size={8} style={{ color: "rgba(255,255,255,0.6)" }} />
+                <button aria-label={`Remove ${att.name}`} onClick={() => onRemoveAttachment(i)} style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "var(--color-overlay-backdrop)", border: "1px solid var(--color-border-subtle)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                  <X size={8} style={{ color: "var(--color-text-secondary)" }} />
                 </button>
               )}
             </div>
@@ -144,10 +160,10 @@ export default function Composer({
       {/* Input row */}
       <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         {/* Attach buttons */}
-        <button type="button" aria-label="Attach file" onClick={() => fileInputRef.current?.click()} className="hover-brighten" style={{ background: "transparent", border: "none", cursor: "pointer", padding: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.15)", flexShrink: 0 }}>
+        <button type="button" aria-label="Attach file" onClick={() => fileInputRef.current?.click()} className="hover-brighten" style={{ background: "transparent", border: "none", cursor: "pointer", padding: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--color-text-faint)", flexShrink: 0 }}>
           <Paperclip size={16} />
         </button>
-        <button type="button" aria-label="Attach image" onClick={() => imageInputRef.current?.click()} className="hover-brighten" style={{ background: "transparent", border: "none", cursor: "pointer", padding: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.15)", flexShrink: 0 }}>
+        <button type="button" aria-label="Attach image" onClick={() => imageInputRef.current?.click()} className="hover-brighten" style={{ background: "transparent", border: "none", cursor: "pointer", padding: 8, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--color-text-faint)", flexShrink: 0 }}>
           <ImagePlus size={16} />
         </button>
 
@@ -170,7 +186,7 @@ export default function Composer({
             onChange={handleChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={isProcessing ? "Waiting for response..." : "Message..."}
+            placeholder={isProcessing && !isChannel ? "Waiting for response..." : "Message..."}
             className="composer-input"
             rows={1}
             style={{
@@ -179,14 +195,14 @@ export default function Composer({
               background: "transparent",
               border: "none",
               outline: "none",
-              color: "rgba(255,255,255,0.85)",
+              color: "var(--color-text-primary)",
               fontSize: 16,
               fontFamily: "inherit",
               lineHeight: "22px",
               resize: "none",
               height: 22,
               overflow: "hidden",
-              opacity: isProcessing ? 0.5 : 1,
+              opacity: isProcessing && !isChannel ? 0.5 : 1,
               padding: 0,
               margin: 0,
             }}
@@ -194,13 +210,13 @@ export default function Composer({
         </div>
 
         {/* Send / Cancel */}
-        {isProcessing ? (
+        {isProcessing && !isChannel ? (
           <button aria-label="Stop response" onClick={onCancel} className="send-btn" style={{ width: 32, height: 32, borderRadius: "50%", background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <Square size={10} fill="rgba(239,68,68,0.8)" style={{ color: "rgba(239,68,68,0.8)" }} />
           </button>
         ) : (
-          <button aria-label="Send message" onClick={() => { textareaRef.current?.blur(); onSend() }} disabled={!canSend} className="send-btn" style={{ width: 32, height: 32, borderRadius: "50%", background: canSend ? "rgba(255,255,255,0.88)" : "rgba(255,255,255,0.04)", border: "none", cursor: canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <ArrowUp size={14} style={{ color: canSend ? "#111113" : "rgba(255,255,255,0.1)" }} />
+          <button aria-label="Send message" onClick={() => { textareaRef.current?.blur(); onSend() }} disabled={!canSend} className="send-btn" style={{ width: 32, height: 32, borderRadius: "50%", background: canSend ? "var(--color-text-primary)" : "var(--color-button-bg)", border: "none", cursor: canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <ArrowUp size={14} style={{ color: canSend ? "var(--color-canvas)" : "var(--color-border-subtle)" }} />
           </button>
         )}
       </div>

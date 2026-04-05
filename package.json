@@ -34,6 +34,7 @@
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
     "class-variance-authority": "^0.7.1",
+    "claude": "^0.1.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.6.0",
     "next": "16.2.1",
@@ -58,11 +59,17 @@
       "icon": "electron/icon.icns"
     },
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "electron/icon.png"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "electron/icon.png",
       "category": "Development"
     },

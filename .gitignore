@@ -54,3 +54,7 @@ __pycache__/
 electron-debug.log
 .claude/
 .claude/worktrees/busy-wiles
+dist/
+*.app
+*.dmg
+node_modules/

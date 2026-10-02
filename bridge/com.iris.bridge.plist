@@ -6,8 +6,9 @@
     <string>com.iris.bridge</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/tmp/hermes-agent/venv/bin/python</string>
-        <string>/Users/ben/Desktop/Iris/bridge/server.py</string>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>/PATH/TO/Iris/bridge/server.py</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

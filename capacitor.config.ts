@@ -5,7 +5,8 @@ const config: CapacitorConfig = {
   appName: 'Iris',
   webDir: 'out',
   server: {
-    url: 'http://100.121.197.106:8643',
+    // Local bridge default. Override for device testing against your LAN/Tailscale host.
+    url: process.env.IRIS_CAPACITOR_SERVER_URL || 'http://127.0.0.1:8643',
     cleartext: true,
   },
   ios: {

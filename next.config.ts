@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["100.121.197.106"],
+  // Local / LAN hosts for Next dev. Prefer localhost for public clones.
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   output: "export",
   devIndicators: false,
 };

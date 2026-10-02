@@ -1,36 +1,98 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Iris
 
-## Getting Started
+Desktop and mobile UI for a personal multi-agent workspace. Iris is the chat shell, session sidebar, agent pantheon, and settings surface. Model intelligence runs in an external Hermes agent process; a Python bridge in this repo connects them over WebSockets.
 
-First, run the development server:
+## What it is
+
+| Piece | Role | In this repo? |
+|-------|------|---------------|
+| Iris | Next.js UI (Electron desktop, Capacitor iOS) | Yes |
+| Bridge | FastAPI + WebSocket server (`bridge/server.py`) | Yes |
+| Hermes | Agent runtime (tools, memory, jobs) | No (install separately) |
+
+Iris does not implement the LLM loop itself. It streams messages, tool calls, reasoning deltas, and session state from the bridge.
+
+## Stack
+
+- **UI:** Next.js, React, TypeScript, Tailwind, Radix/shadcn-style components
+- **Desktop:** Electron (`electron/`)
+- **Mobile:** Capacitor iOS plugins (haptics, push, camera, filesystem, biometrics)
+- **Bridge:** Python FastAPI, WebSocket protocol, optional `IRIS_API_KEY` auth
+- **Package managers:** npm / pnpm (lockfiles present)
+
+## Capabilities present in the code
+
+Honest list from the UI, hooks, and bridge protocol (not a marketing feature sheet):
+
+- Streaming chat with tool-call lifecycle (`preparing` / `running` / success / error)
+- Sessions: create, resume, delete, fork, dividers
+- Channels: list/create/archive, pin messages
+- Agent pantheon UI (Hermes, Charon, Nyx, Icarus, Talos assets under `public/agents/`)
+- Projects list/create via bridge
+- Cron-style jobs: list, create, pause, resume, trigger, remove
+- Config, permissions, skills, toolsets, memory read paths
+- Activity panel, calendar panel, settings tabs (memory, permissions, tools, tasks)
+- Command palette, mention picker, markdown rendering, offline banner
+- Bridge health/connection hooks; optional localStorage API key for non-localhost auth
+- Electron tray/window + optional computer-use overlay scaffolding
+- Hermes install helper script (`hermes-install.sh`) wrapping the upstream installer
+
+## What you need outside this repo
+
+1. A running Hermes agent install (see `hermes-install.sh` or [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)).
+2. Bridge process: `python` / uvicorn on port **8643** by default (`IRIS_BRIDGE_PORT`).
+3. Optional: set `IRIS_API_KEY` for non-localhost clients.
+
+## How to run (UI)
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone https://github.com/Beneii/Iris.git
+cd Iris
+npm install   # or pnpm install
+npm run dev   # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Electron (dev):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run electron:dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Bridge (from repo root, with Python deps for FastAPI available):
 
-## Learn More
+```bash
+# example
+uvicorn bridge.server:app --host 127.0.0.1 --port 8643
+```
 
-To learn more about Next.js, take a look at the following resources:
+Capacitor live-reload URL defaults to `http://127.0.0.1:8643`. Override with `IRIS_CAPACITOR_SERVER_URL` when testing on a device.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Screenshots
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Add UI captures under `docs/screenshots/` when available.
 
-## Deploy on Vercel
+```
+docs/screenshots/chat.png          # streaming chat + tool calls
+docs/screenshots/pantheon.png      # agent roster
+docs/screenshots/sessions.png      # sidebar sessions
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+*(Placeholders until screenshots are added.)*
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+docs/screenshots/
+```
+
+## Repository notes
+
+- Root README previously was create-next-app boilerplate; this file replaces it for hiring review.
+- Secrets belong in environment variables (`.env*` is gitignored). Never commit API keys.
+- Companion systems (Hermes config under `~/.hermes/`) stay on the operator machine.
+
+## Suggested topics
+
+`typescript`, `nextjs`, `electron`, `capacitor`, `fastapi`, `websockets`, `agents`, `react`
+
+## License
+
+Personal portfolio project.

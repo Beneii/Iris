@@ -12,15 +12,15 @@ There are **three separate systems**. Do not confuse them.
 
 | System | What it is | Where it lives | Language |
 |--------|-----------|----------------|----------|
-| **Iris** | Frontend UI (this repo) | `/Users/ben/Desktop/Iris` | TypeScript, React, Next.js |
-| **Hermes** | AI agent backend | `/tmp/hermes-agent` | Python |
+| **Iris** | Frontend UI (this repo) | `this repository (clone root)` | TypeScript, React, Next.js |
+| **Hermes** | AI agent backend | `Hermes install dir (e.g. ~/.hermes/hermes-agent)` | Python |
 | **Bridge** | WebSocket server connecting them | `bridge/server.py` (in this repo) | Python (FastAPI) |
 
 ### Iris (this repo)
 The desktop/mobile frontend. Electron app for macOS, Capacitor for iOS. Renders the chat UI, sidebar, agent panels, settings. **Has no AI logic.** All intelligence comes from Hermes via the bridge.
 
 ### Hermes (NOT in this repo)
-The AI agent that actually thinks, uses tools, manages memory, and runs tasks. Lives at `/tmp/hermes-agent`. Has its own config at `~/.hermes/config.yaml`. Iris never imports from Hermes directly — all communication goes through the bridge WebSocket.
+The AI agent that actually thinks, uses tools, manages memory, and runs tasks. Lives at `Hermes install dir (e.g. ~/.hermes/hermes-agent)`. Has its own config at `~/.hermes/config.yaml`. Iris never imports from Hermes directly — all communication goes through the bridge WebSocket.
 
 ### Bridge (`bridge/server.py`)
 FastAPI + WebSocket server that Iris connects to on `ws://127.0.0.1:8643/ws`. The bridge:

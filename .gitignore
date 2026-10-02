@@ -58,3 +58,11 @@ dist/
 *.app
 *.dmg
 node_modules/
+
+# bridge build artifacts
+bridge/.next/
+bridge/__pycache__/
+
+# local agent worktrees
+.claude/
+!.env.example
